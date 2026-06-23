@@ -1,4 +1,33 @@
+
+
+
+
 """
+import csv
+
+filepath = "your_file.csv"
+error_log = "bad_lines.txt"
+
+with open(filepath, "r", encoding="utf-8", errors="replace") as f, \
+     open(error_log, "w", encoding="utf-8") as log:
+    
+    reader = csv.reader(f)
+    header = next(reader)
+    expected_cols = len(header)
+    log.write(f"Expected columns: {expected_cols}\n")
+    log.write("=" * 60 + "\n\n")
+
+    bad_count = 0
+    for i, row in enumerate(reader, start=2):
+        if len(row) != expected_cols:
+            bad_count += 1
+            log.write(f"Line {i}: got {len(row)} fields\n")
+            log.write(f"Raw: {repr(row)}\n")
+            log.write("-" * 40 + "\n")
+
+    log.write(f"\nTotal bad lines: {bad_count}\n")
+
+print(f"Done. {bad_count} bad lines written to {error_log}")
 SQL Query Parser - Extracts Table & Column Usage from CSV
 =========================================================
 Reads a CSV with a `sqltextinfo` column, parses every SQL query,
