@@ -3,8 +3,56 @@
 
 
 """
-import csv
 
+import re
+
+def clean_csv(input_filepath, output_filepath):
+    """
+    Reads raw CSV, cleans each query:
+    - Removes embedded double quotes inside queries
+    - Ensures each query is wrapped in double quotes
+    - Ensures each query ends with a semicolon
+    - Writes cleaned output to a new CSV
+    """
+    cleaned_rows = []
+
+    with open(input_filepath, "r", encoding="utf-8", errors="replace") as f:
+        header = f.readline().strip()  # preserve header as-is
+        cleaned_rows.append(header)
+
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Step 1: Remove ALL double quotes from the raw line
+            cleaned = line.replace('"', '')
+
+            # Step 2: Remove leading/trailing whitespace again after quote removal
+            cleaned = cleaned.strip()
+
+            # Step 3: Add semicolon at end if missing
+            if not cleaned.endswith(';'):
+                cleaned = cleaned + ';'
+
+            # Step 4: Wrap entire query in double quotes
+            cleaned = f'"{cleaned}"'
+
+            cleaned_rows.append(cleaned)
+
+    # Write cleaned file
+    with open(output_filepath, "w", encoding="utf-8") as f:
+        f.write("\n".join(cleaned_rows))
+
+    print(f"Done. {len(cleaned_rows) - 1} queries cleaned → {output_filepath}")
+
+
+# Usage
+clean_csv("input.csv", "input_cleaned.csv")
+
+
+
+____
 filepath = "your_file.csv"
 error_log = "bad_lines.txt"
 
