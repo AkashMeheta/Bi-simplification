@@ -1,0 +1,57 @@
+import re
+import csv
+
+def clean_sql_query(chunk):
+    """Clean a single SQL query string — same logic as before."""
+    # Normalize Windows line endings
+    chunk = chunk.replace('\r\n', '\n').replace('\r', '\n')
+
+    # Strip surrounding double quotes and whitespace
+    chunk = re.sub(r'^[\s"]+|[\s"]+$', '', chunk)
+
+    # Must start with SELECT
+    if not re.match(r'SELECT\b', chunk, re.IGNORECASE):
+        return chunk  # return as-is if not a SELECT query
+
+    # Process line by line to preserve -- comments
+    lines = chunk.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        line = line.strip()
+        line = re.sub(r'^[\s"]+|[\s"]+$', '', line)
+        if line:
+            line = line.replace('"', "'")
+            cleaned_lines.append(line)
+
+    query = '\n'.join(cleaned_lines)
+    return f'"{query};"'
+
+
+def clean_csv_file(input_path, output_path):
+    with open(input_path, 'r', encoding='utf-8', newline='') as infile:
+        reader = csv.DictReader(infile)
+        fieldnames = reader.fieldnames
+
+        if 'SqlTextInfo' not in fieldnames:
+            print("Error: 'SqlTextInfo' column not found in CSV.")
+            return
+
+        rows = []
+        for row in reader:
+            # Only touch SqlTextInfo — leave LogDate and Username as-is
+            row['SqlTextInfo'] = clean_sql_query(row['SqlTextInfo'])
+            rows.append(row)
+
+    with open(output_path, 'w', encoding='utf-8', newline='') as outfile:
+        writer = csv.DictWriter(outfile, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"Done. {len(rows)} rows written to {output_path}")
+
+
+# --- Run it ---
+input_file  = 'input.csv'   # change to your input file path
+output_file = 'output.csv'  # change to your desired output path
+
+clean_csv_file(input_file, output_file)
