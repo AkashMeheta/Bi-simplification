@@ -280,80 +280,73 @@ def run_pipeline(df: pd.DataFrame, output_path: str = "sql_column_metrics.xlsx")
 
 
 # ---------------------------------------------------------------------------
-# Demo / Smoke-test
+# CSV Loader
+# ---------------------------------------------------------------------------
+def load_csv(csv_path: str) -> pd.DataFrame:
+    """
+    Robustly load the input CSV.
+
+    Handles:
+    - Embedded double quotes and commas inside SQL fields
+    - Multi-line SQL values (quoted fields spanning multiple lines)
+    - BOM markers (utf-8-sig)
+
+    Expected columns: LogDate, UserName, SqlTextInfo
+    """
+    try:
+        df = pd.read_csv(
+            csv_path,
+            encoding="utf-8-sig",       # handles BOM if present
+            quotechar='"',
+            doublequote=True,            # "" inside quoted fields → single "
+            skipinitialspace=True,
+            on_bad_lines="warn",         # log bad lines instead of crashing
+            low_memory=False,
+        )
+    except UnicodeDecodeError:
+        # Fallback for Windows-encoded files
+        df = pd.read_csv(
+            csv_path,
+            encoding="cp1252",
+            quotechar='"',
+            doublequote=True,
+            skipinitialspace=True,
+            on_bad_lines="warn",
+            low_memory=False,
+        )
+
+    required = {"LogDate", "UserName", "SqlTextInfo"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"CSV is missing required columns: {missing}. Found: {list(df.columns)}")
+
+    print(f"Loaded {len(df):,} rows from '{csv_path}'")
+    return df
+
+
+# ---------------------------------------------------------------------------
+# Entry Point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    sample_data = {
-        "LogDate": [
-            "2024-01-15", "2024-01-15", "2024-01-16",
-            "2024-01-16", "2024-01-17", "2024-01-17",
-        ],
-        "UserName": [
-            "john.doe",       # User
-            "svt_service01",  # App  (contains 'svt')
-            "jane.smith",     # User
-            "opt_runner",     # App  (contains 'opt')
-            "bob.jones",      # User
-            "SVT_BATCH",      # App  (case-insensitive)
-        ],
-        "SqlTextInfo": [
-            # Multi-line with double-quoted identifiers
-            """
-            SELECT
-                o."order_id",
-                o."customer_id",
-                -- inline comment should not collapse next line
-                o."total_amount"
-            FROM orders o
-            WHERE o."status" = 'active'
-            """,
+    import sys
+    import os
 
-            # Multi-line with a block comment
-            """
-            SELECT
-                c.customer_id,
-                c.first_name,
-                c.last_name,
-                /* this is a
-                   multi-line comment */
-                c.email
-            FROM customers c
-            JOIN orders o ON c.customer_id = o.customer_id
-            WHERE c.region = 'APAC'
-            """,
+    if len(sys.argv) < 2:
+        print("Usage: python sql_metrics_pipeline.py <input.csv> [output.xlsx]")
+        print("  input.csv   – CSV file with columns: LogDate, UserName, SqlTextInfo")
+        print("  output.xlsx – (optional) output path, default: sql_column_metrics.xlsx")
+        sys.exit(1)
 
-            # Subquery
-            """
-            SELECT p.product_name, p.price, inv.quantity
-            FROM products p
-            LEFT JOIN inventory inv ON p.product_id = inv.product_id
-            WHERE p.category = 'electronics'
-              AND inv.quantity > 0
-            """,
+    csv_path = sys.argv[1]
+    output_path = sys.argv[2] if len(sys.argv) > 2 else "sql_column_metrics.xlsx"
 
-            # Malformed SQL – should be logged, not crash
-            "SELECT * FROM WHERE broken $$$ syntax",
+    if not os.path.exists(csv_path):
+        print(f"Error: file not found → {csv_path}")
+        sys.exit(1)
 
-            # Aggregate with alias (alias columns should not count as column refs)
-            """
-            SELECT
-                s.region,
-                SUM(s.revenue)   AS total_revenue,
-                COUNT(s.sale_id) AS num_sales
-            FROM sales s
-            GROUP BY s.region
-            """,
+    df_input = load_csv(csv_path)
+    result = run_pipeline(df_input, output_path)
 
-            # Simple single-table – no explicit qualifier
-            """
-            SELECT employee_id, first_name, last_name, department
-            FROM employees
-            WHERE hire_date >= '2020-01-01'
-            """,
-        ],
-    }
-
-    df_input = pd.DataFrame(sample_data)
-    result = run_pipeline(df_input, "sql_column_metrics.xlsx")
-    print("\nSample output (first 20 rows):")
+    print(f"\nTop 20 rows of output:")
     print(result.head(20).to_string(index=False))
+    print(f"\nError log: sql_parse_errors.log")
