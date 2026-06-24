@@ -1,17 +1,14 @@
 import re
 import csv
 
-# Keywords that identify valid SQL queries
 SQL_KEYWORDS = ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'WITH', 'CREATE', 'DROP', 'ALTER', 'MERGE', 'EXEC', 'CALL')
 
 def clean_sql_file(input_path, output_path):
     cleaned_queries = []
     skipped = 0
 
-    with open(input_path, 'r', encoding='utf-8-sig') as f:  # utf-8-sig handles BOM
+    with open(input_path, 'r', encoding='utf-8-sig', newline='') as f:  # newline='' is critical
         reader = csv.DictReader(f)
-
-        # Strip hidden whitespace from column names
         reader.fieldnames = [name.strip() for name in reader.fieldnames]
 
         for row in reader:
@@ -45,10 +42,7 @@ def clean_sql_file(input_path, output_path):
                     line = line.replace('"', "'")
                     cleaned_lines.append(line)
 
-            # Re-join with newlines so -- comments only affect their own line
             query = '\n'.join(cleaned_lines)
-
-            # Wrap in double quotes with semicolon inside
             cleaned_queries.append(f'"{query};"')
 
     with open(output_path, 'w', encoding='utf-8') as f:
