@@ -3,6 +3,10 @@ import csv
 
 def clean_sql_query(chunk):
     """Clean a single SQL query string — same logic as before."""
+    # Guard against None or empty values
+    if not chunk:
+        return chunk
+
     # Normalize Windows line endings
     chunk = chunk.replace('\r\n', '\n').replace('\r', '\n')
 
@@ -37,9 +41,11 @@ def clean_csv_file(input_path, output_path):
             return
 
         rows = []
-        for row in reader:
-            # Only touch SqlTextInfo — leave LogDate and Username as-is
-            row['SqlTextInfo'] = clean_sql_query(row['SqlTextInfo'])
+        for i, row in enumerate(reader, start=2):  # start=2 because row 1 is header
+            val = row.get('SqlTextInfo')
+            if val is None:
+                print(f"Warning: Row {i} has no SqlTextInfo value — skipping clean.")
+            row['SqlTextInfo'] = clean_sql_query(val)
             rows.append(row)
 
     with open(output_path, 'w', encoding='utf-8', newline='') as outfile:
