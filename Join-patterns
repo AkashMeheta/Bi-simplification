@@ -1,0 +1,411 @@
+# =============================================================================
+# Teradata Query JOIN Metrics Pipeline — Pure Python (No PySpark)
+# =============================================================================
+# Dependencies:  pip install pandas sqlglot openpyxl
+#
+# Output schema:
+#   Row_Wid                  – incremental integer (1, 2, 3 …)
+#   Log_Date                 – date of the query (Metric_Date from CSV)
+#   Left_Table_Database      – schema/db of the FROM (left) table
+#   Left_Table_Name          – name of the FROM (left) table
+#   Right_Table_Database     – schema/db of the JOIN (right) table
+#   Right_Table_Name         – name of the JOIN (right) table
+#   Join_Type                – INNER / LEFT / RIGHT / FULL / JOIN
+#   Join_Keys                – comma-separated ON clause column names
+#   Join_Count               – # times this exact join pair appears on that date
+#   Distinct_Users           – # unique human users who ran a query with this join
+#   Distinct_Apps            – # unique app accounts who ran a query with this join
+#   Created_Timestamp        – timestamp when this script ran
+#
+# App detection rule (case-insensitive prefix match) — extend APP_PREFIXES below:
+#   username starts with any prefix in APP_PREFIXES  →  APP,  else  →  USER
+#
+# Handles:
+#   • Multiline SQL records in the CSV
+#   • Simple JOINs, multiple JOINs, subquery JOINs, UNION queries
+#   • Multi-key ON conditions  (a.id=b.id AND a.type=b.type → "ID, TYPE")
+#   • Teradata-specific syntax (TOP, CAST FORMAT, QUALIFY …)
+#   • Utility commands (SHOW/HELP/COLLECT) → skipped and logged
+# =============================================================================
+
+import re
+from datetime import datetime
+
+import pandas as pd
+import sqlglot
+from sqlglot import exp
+from openpyxl import load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+
+# ── CONFIG ────────────────────────────────────────────────────────────────────
+
+INPUT_CSV   = "input_3_c.csv"                   # ← same CSV as column-usage script
+OUTPUT_XLSX = "teradata_join_metrics.xlsx"
+SKIP_LOG    = "join_skipped_queries.txt"
+
+# Add any app/service account prefixes here (case-insensitive)
+APP_PREFIXES = (
+    "svp", "ovt", "dt",
+    "svt",                  # SVT_ETL_SIARX_PRD style accounts
+    "etl", "svc", "app",    # common service account patterns
+)
+
+
+# =============================================================================
+# STEP 1 — Read & parse the multiline CSV
+# =============================================================================
+# Record format:
+#   "SELECT ...
+#    multiline SQL ...
+#    WHERE x='Y';","YYYY-MM-DD",USERID
+#
+# Regex anchors:
+#   • date field must match exactly YYYY-MM-DD
+#   • user token must be followed only by whitespace/end-of-line
+#   This prevents false splits on semicolons inside SQL string literals.
+# =============================================================================
+
+with open(INPUT_CSV, "r", encoding="utf-8") as fh:
+    raw_text = fh.read()
+
+body = "\n".join(raw_text.splitlines()[1:])     # drop header line
+
+RECORD_RE = re.compile(
+    r'"(.*?);"\s*,\s*"(\d{4}-\d{2}-\d{2})"\s*,\s*([^\s,"\n]+)\s*(?:\n|$)',
+    re.DOTALL
+)
+
+raw_records = RECORD_RE.findall(body)
+print(f"[INFO] Records found in CSV : {len(raw_records)}")
+
+
+# =============================================================================
+# STEP 2 — Helpers
+# =============================================================================
+
+def classify(username: str) -> str:
+    """'app' if username starts with any known app prefix, else 'user'."""
+    return "app" if username.lower().startswith(APP_PREFIXES) else "user"
+
+
+def get_db_and_table(tbl_node) -> tuple:
+    """Extract (DATABASE, TABLE_NAME) from a sqlglot Table AST node."""
+    db   = tbl_node.args.get("db")
+    name = tbl_node.name
+    return (
+        db.name.upper()   if db   else "",
+        name.upper()      if name else "",
+    )
+
+
+def resolve_join_table(join_this):
+    """
+    Return the physical Table node for the right-hand side of a JOIN.
+
+    • Direct table:  JOIN db.tbl t  → returns the Table node
+    • Subquery:      JOIN (SELECT ... FROM db.tbl) t
+                     → resolves to the subquery's own FROM table so we always
+                        record real table names, never anonymous subqueries.
+    """
+    if isinstance(join_this, exp.Table):
+        return join_this
+
+    if isinstance(join_this, exp.Subquery):
+        inner = join_this.this
+        if isinstance(inner, exp.Select):
+            from_node = inner.args.get("from_")
+            if from_node and isinstance(from_node.this, exp.Table):
+                return from_node.this
+
+    return None
+
+
+def extract_join_keys(on_expr) -> str:
+    """
+    Extract column names used as join keys from an ON expression.
+    e.g.  a.id = b.id AND a.type = b.type  →  "ID, TYPE"
+    Deduped, preserving first-seen order.
+    """
+    if on_expr is None:
+        return ""
+    keys = []
+    for eq in on_expr.find_all(exp.EQ):
+        for col in eq.find_all(exp.Column):
+            if col.name:
+                keys.append(col.name.upper())
+    return ", ".join(dict.fromkeys(keys))
+
+
+def extract_joins(raw_sql: str) -> tuple:
+    """
+    Parse one SQL string and return (join_list, skip_reason).
+
+    join_list — list of dicts with keys:
+        left_db, left_tbl, right_db, right_tbl, join_type, join_keys
+
+    skip_reason — None if OK, string if the SQL was unparseable/utility.
+
+    Handles:
+        • Simple JOINs, multiple JOINs per SELECT
+        • Subquery JOINs  (resolves to subquery's own FROM table)
+        • UNION queries   (walks every SELECT scope independently)
+        • Multi-key ON    (a.id=b.id AND a.type=b.type)
+    """
+    sql         = raw_sql.replace('""', '"').strip()
+    sql         = re.sub(r'--[^\n]*', '', sql)      # strip line comments
+    results     = []
+    skip_reason = None
+
+    try:
+        statements = sqlglot.parse(
+            sql,
+            dialect     = "teradata",
+            error_level = sqlglot.ErrorLevel.IGNORE,
+        )
+
+        for stmt in statements:
+            if stmt is None:
+                continue
+
+            # Utility commands have no parseable structure
+            if type(stmt).__name__ == "Command":
+                skip_reason = f"Teradata utility command: {sql.strip()[:80]}"
+                continue
+
+            # Walk every SELECT scope — handles UNIONs and nested subqueries
+            for select in stmt.find_all(exp.Select):
+                from_node = select.args.get("from_")
+                if not from_node or not isinstance(from_node.this, exp.Table):
+                    continue
+
+                left_db, left_tbl = get_db_and_table(from_node.this)
+                if not left_tbl:
+                    continue
+
+                for join in select.args.get("joins") or []:
+                    right_node = resolve_join_table(join.this)
+                    if right_node is None:
+                        continue
+
+                    right_db, right_tbl = get_db_and_table(right_node)
+                    if not right_tbl:
+                        continue
+
+                    join_type = str(join.args.get("kind") or "").upper() or "JOIN"
+                    join_keys = extract_join_keys(join.args.get("on"))
+
+                    results.append({
+                        "left_db"  : left_db,
+                        "left_tbl" : left_tbl,
+                        "right_db" : right_db,
+                        "right_tbl": right_tbl,
+                        "join_type": join_type,
+                        "join_keys": join_keys,
+                    })
+
+    except Exception as exc:
+        skip_reason = f"Parse error: {exc}"
+
+    return results, skip_reason
+
+
+# =============================================================================
+# STEP 3 — Explode every record → flat join rows
+# =============================================================================
+
+exploded = []
+skip_log = []
+
+for raw_sql, date, user in raw_records:
+    date = date.strip()
+    user = user.strip()
+    acct = classify(user)
+
+    joins, skip_reason = extract_joins(raw_sql)
+
+    if skip_reason:
+        skip_log.append({
+            "date"  : date,
+            "user"  : user,
+            "reason": skip_reason,
+            "sql"   : raw_sql.replace('""', '"').strip()[:300],
+        })
+
+    if not joins:
+        continue
+
+    for j in joins:
+        exploded.append({
+            "Log_Date"  : date,
+            "left_db"   : j["left_db"],
+            "left_tbl"  : j["left_tbl"],
+            "right_db"  : j["right_db"],
+            "right_tbl" : j["right_tbl"],
+            "join_type" : j["join_type"],
+            "join_keys" : j["join_keys"],
+            "username"  : user,
+            "acct_type" : acct,
+        })
+
+print(f"[INFO] Exploded join rows (before agg) : {len(exploded)}")
+print(f"[INFO] Skipped / unparseable           : {len(skip_log)}")
+
+if not exploded:
+    raise SystemExit("[ERROR] No join rows extracted. Check INPUT_CSV path and format.")
+
+df_exp = pd.DataFrame(exploded)
+
+
+# =============================================================================
+# STEP 4 — Aggregate
+# =============================================================================
+# Group by (Log_Date, left_db, left_tbl, right_db, right_tbl, join_type, join_keys)
+# Compute: Join_Count, Distinct_Users, Distinct_Apps
+#
+# Uses three separate groupby passes (avoids the lambda-closure bug where
+# every group reports distinct count = 1).
+# =============================================================================
+
+GRP_KEYS = [
+    "Log_Date",
+    "left_db", "left_tbl",
+    "right_db", "right_tbl",
+    "join_type", "join_keys",
+]
+
+df_users = (df_exp[df_exp["acct_type"] == "user"]
+            .groupby(GRP_KEYS)["username"]
+            .nunique()
+            .rename("Distinct_Users"))
+
+df_apps  = (df_exp[df_exp["acct_type"] == "app"]
+            .groupby(GRP_KEYS)["username"]
+            .nunique()
+            .rename("Distinct_Apps"))
+
+df_count = (df_exp.groupby(GRP_KEYS)["username"]
+            .count()
+            .rename("Join_Count"))
+
+df_agg = (pd.concat([df_count, df_users, df_apps], axis=1)
+            .fillna(0)
+            .astype({"Distinct_Users": int, "Distinct_Apps": int})
+            .reset_index()
+            .sort_values(GRP_KEYS)
+            .reset_index(drop=True))
+
+
+# =============================================================================
+# STEP 5 — Rename columns to final schema & add Row_Wid / Created_Timestamp
+# =============================================================================
+
+df_agg.insert(0, "Row_Wid", range(1, len(df_agg) + 1))
+df_agg["Created_Timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+df_final = df_agg.rename(columns={
+    "left_db"  : "Left_Table_Database",
+    "left_tbl" : "Left_Table_Name",
+    "right_db" : "Right_Table_Database",
+    "right_tbl": "Right_Table_Name",
+    "join_type": "Join_Type",
+    "join_keys": "Join_Keys",
+})[[
+    "Row_Wid",
+    "Log_Date",
+    "Left_Table_Database",
+    "Left_Table_Name",
+    "Right_Table_Database",
+    "Right_Table_Name",
+    "Join_Type",
+    "Join_Keys",
+    "Join_Count",
+    "Distinct_Users",
+    "Distinct_Apps",
+    "Created_Timestamp",
+]]
+
+print(f"[INFO] Final aggregated rows : {len(df_final)}")
+print(df_final.head(10).to_string(index=False))
+
+
+# =============================================================================
+# STEP 6 — Write skip log
+# =============================================================================
+
+if skip_log:
+    with open(SKIP_LOG, "w", encoding="utf-8") as f:
+        f.write(f"Skipped queries — {datetime.now()}\n{'='*80}\n\n")
+        for i, entry in enumerate(skip_log, 1):
+            f.write(f"[{i}] date={entry['date']}  user={entry['user']}\n")
+            f.write(f"     reason : {entry['reason']}\n")
+            f.write(f"     sql    : {entry['sql']}\n\n")
+    print(f"[INFO] Skip log written → {SKIP_LOG}")
+
+
+# =============================================================================
+# STEP 7 — Write to Excel with formatting
+# =============================================================================
+
+df_final.to_excel(OUTPUT_XLSX, index=False, sheet_name="Join_Metrics")
+
+wb = load_workbook(OUTPUT_XLSX)
+ws = wb["Join_Metrics"]
+
+HEADER_FILL  = PatternFill("solid", fgColor="1F3864")   # deep navy
+HEADER_FONT  = Font(name="Arial", bold=True, color="FFFFFF", size=10)
+DATA_FONT    = Font(name="Arial", size=10)
+ALT_FILL     = PatternFill("solid", fgColor="E9EFF7")
+THIN_BORDER  = Border(
+    left   = Side(style="thin", color="D0D0D0"),
+    right  = Side(style="thin", color="D0D0D0"),
+    top    = Side(style="thin", color="D0D0D0"),
+    bottom = Side(style="thin", color="D0D0D0"),
+)
+
+# Col indices for centre-align (1-based): Row_Wid, Join_Count, Distinct_*, Join_Type
+CENTRE_COLS = {1, 7, 9, 10, 11}
+
+# Header row
+for cell in ws[1]:
+    cell.font      = HEADER_FONT
+    cell.fill      = HEADER_FILL
+    cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    cell.border    = THIN_BORDER
+ws.row_dimensions[1].height = 30
+
+# Data rows
+for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
+    fill = ALT_FILL if row_idx % 2 == 0 else PatternFill()
+    for cell in row:
+        cell.font      = DATA_FONT
+        cell.fill      = fill
+        cell.border    = THIN_BORDER
+        cell.alignment = Alignment(
+            horizontal = "center" if cell.column in CENTRE_COLS else "left",
+            vertical   = "center",
+        )
+
+# Column widths
+col_widths = {
+    1 : 9,   # Row_Wid
+    2 : 13,  # Log_Date
+    3 : 22,  # Left_Table_Database
+    4 : 35,  # Left_Table_Name
+    5 : 22,  # Right_Table_Database
+    6 : 35,  # Right_Table_Name
+    7 : 10,  # Join_Type
+    8 : 30,  # Join_Keys
+    9 : 12,  # Join_Count
+    10: 15,  # Distinct_Users
+    11: 14,  # Distinct_Apps
+    12: 22,  # Created_Timestamp
+}
+for col_num, width in col_widths.items():
+    ws.column_dimensions[get_column_letter(col_num)].width = width
+
+ws.freeze_panes    = "A2"
+ws.auto_filter.ref = ws.dimensions
+
+wb.save(OUTPUT_XLSX)
+print(f"[INFO] Saved → {OUTPUT_XLSX}")
