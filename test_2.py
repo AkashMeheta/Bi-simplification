@@ -1,98 +1,92 @@
-from pyspark.sql import SparkSession
+import pandas as pd
+import re
 
-spark = SparkSession.builder.appName("CustomParser").getOrCreate()
+INPUT_FILE  = "input_3_c.csv"
+OUTPUT_FILE = "output_parsed.xlsx"
 
-# ── Step 1: Read raw file ────────────────────────────────────────────────────
-df_raw = spark.read.text("input_3_c.csv")
-lines = df_raw.rdd.map(lambda x: x[0]).collect()
+# ── Step 1: Read the entire file as raw text ─────────────────────────────────
+with open(INPUT_FILE, "r", encoding="utf-8") as f:
+    content = f.read()
 
-rows = []
-buffer = ""
+# ── Step 2: Skip the header line ─────────────────────────────────────────────
+lines = content.splitlines()
+# First line is:  SqlTextInfo,Metric_Date,users  → skip it
+body = "\n".join(lines[1:])
 
-for line in lines:
-    buffer = (buffer + "\n" + line) if buffer else line
+# ── Step 3: Split into individual records ────────────────────────────────────
+# From the CSV every record looks like:
+#
+#   "SELECT ...
+#    ...
+#    AND something = 'ESI';","2026-03-30",C8V4SJ
+#
+# i.e.  opening "  ...multiline SQL...  ;" , "date" , user
+#
+# Regex breakdown:
+#   "           →  literal opening double-quote of the SQL field
+#   (.*?)       →  SQL content (non-greedy, DOTALL so . matches newlines)
+#   ;"          →  SQL always ends with semicolon then closing double-quote
+#   \s*,\s*     →  comma separator (allow spaces)
+#   "([^"]+)"   →  date field in double quotes
+#   \s*,\s*     →  comma separator
+#   (\S+)       →  user id (no spaces)
 
-    stripped = buffer.strip()
+RECORD_PATTERN = re.compile(
+    r'"(.*?);"\s*,\s*"([^"]+)"\s*,\s*(\S+)',
+    re.DOTALL
+)
 
-    # FIX 1: A complete record ends with a closing double-quote that terminates
-    # the SQL field.  The original check `endswith(';"')` was too narrow — it
-    # required a literal semicolon right before the closing quote, which only
-    # matches some SQL statements.  We instead look for any line whose last
-    # non-whitespace character is a double-quote AND that contains at least
-    # two commas (sql, user, date), which is a reliable "end of record" signal.
-    #
-    # Adjust this condition to match whatever your actual record terminator is.
-    # Common alternatives:
-    #   stripped.endswith('"')          ← SQL field is always last, quoted
-    #   stripped.endswith(';"')         ← SQL always ends with semicolon+quote
-    #   '"' in stripped and stripped.count(',') >= 2  ← lenient version
-    if stripped.endswith('"') and stripped.count(',') >= 2:
-        rows.append(stripped)
-        buffer = ""
+records = RECORD_PATTERN.findall(body)
+print(f"[INFO] Total records found: {len(records)}")
 
-# FIX 2: Don't silently drop the last record if the file has no trailing newline
-if buffer.strip():
-    rows.append(buffer.strip())
+# ── Step 4: Clean each SQL block and build rows ───────────────────────────────
+parsed_rows = []
+skipped     = []
 
-print(f"[INFO] Total records collected: {len(rows)}")
-
-# ── Step 2: Parse each record ────────────────────────────────────────────────
-parsed_data = []
-skipped = []
-
-for i, row in enumerate(rows):
+for i, (raw_sql, date, user) in enumerate(records):
     try:
-        # The format is:  "<SQL_TEXT>",<user>,<date>
-        # SQL may contain commas, so we cannot simply split(",").
-        # Strategy: find the LAST two commas — date is after the last comma,
-        # user is between the two last commas, everything before is SQL.
+        # raw_sql is everything between the outer CSV quotes (semicolon included at end)
+        # It may contain "" (CSV-escaped double quotes) → unescape to single "
+        sql = raw_sql.replace('""', '"')
 
-        last_comma = row.rfind(',')
-        if last_comma == -1:
-            raise ValueError("No comma found — not a valid row")
+        # Strip leading/trailing whitespace
+        sql = sql.strip()
 
-        second_last_comma = row.rfind(',', 0, last_comma)
-        if second_last_comma == -1:
-            raise ValueError("Only one comma found — cannot split user/date")
+        # Collapse runs of 3+ blank lines to keep SQL readable
+        sql = re.sub(r'\n{3,}', '\n\n', sql)
 
-        sql  = row[:second_last_comma].strip()
-        user = row[second_last_comma + 1 : last_comma].strip()
-        date = row[last_comma + 1:].strip()
+        date = date.strip()
+        user = user.strip()
 
-        # FIX 3: SQL cleaning — unescape doubled quotes ("" → ") but do NOT
-        # blindly remove every remaining quote afterwards.  The original code
-        # did `.replace('""', '"').replace('"', '')` which first unescaped
-        # then deleted every quote, corrupting string literals inside the SQL.
-        if sql.startswith('"') and sql.endswith('"'):
-            inner_sql = sql[1:-1]           # strip the outer CSV quotes
-            inner_sql = inner_sql.replace('""', '"')   # unescape only
-            sql = inner_sql                  # store without the outer CSV quotes
-            # If you need to preserve outer quotes in the DataFrame, use:
-            # sql = f'"{inner_sql}"'
+        if not sql:
+            raise ValueError("Empty SQL after cleaning")
 
-        # FIX 4: Basic validation before appending
-        if not sql or not user or not date:
-            raise ValueError(f"Empty field(s): sql={bool(sql)}, user={bool(user)}, date={bool(date)}")
-
-        parsed_data.append((sql, user, date))
+        parsed_rows.append({
+            "SqlTextInfo": sql,
+            "Metric_Date": date,
+            "users":       user,
+        })
 
     except Exception as e:
-        skipped.append((i, str(e), row[:120]))   # log instead of silent skip
-        continue
+        skipped.append((i, str(e), raw_sql[:80]))
 
-print(f"[INFO] Parsed: {len(parsed_data)}  |  Skipped: {len(skipped)}")
+print(f"[INFO] Parsed: {len(parsed_rows)}  |  Skipped: {len(skipped)}")
 if skipped:
-    print("[WARN] Skipped rows (index, reason, preview):")
+    print("[WARN] Skipped records:")
     for idx, reason, preview in skipped:
-        print(f"  Row {idx}: {reason} | {preview!r}")
+        print(f"  #{idx}: {reason} | {preview!r}")
 
-# ── Step 3: Guard against empty result before creating DataFrame ─────────────
-# FIX 5: createDataFrame([]) with a schema works, but show() on it is
-# misleading (prints nothing).  Warn the user explicitly.
-if not parsed_data:
-    print("[ERROR] No rows were parsed.  Check your record-end condition in Step 1.")
-    spark.stop()
-    raise SystemExit("Aborting — empty dataset.")
+# ── Step 5: Build DataFrame ───────────────────────────────────────────────────
+if not parsed_rows:
+    raise SystemExit("[ERROR] No records parsed. Check INPUT_FILE path and record format.")
 
-df = spark.createDataFrame(parsed_data, ["SqlTextInfo", "users", "Metric_Date"])
-df.show(truncate=False)
+df = pd.DataFrame(parsed_rows, columns=["SqlTextInfo", "Metric_Date", "users"])
+
+print(f"\n[INFO] DataFrame shape: {df.shape}")
+print(df[["Metric_Date", "users"]].to_string())
+print("\n--- First SQL preview (first 300 chars) ---")
+print(df["SqlTextInfo"].iloc[0][:300])
+
+# ── Step 6: Save to Excel ─────────────────────────────────────────────────────
+df.to_excel(OUTPUT_FILE, index=False)
+print(f"\n[INFO] Saved to {OUTPUT_FILE}")
