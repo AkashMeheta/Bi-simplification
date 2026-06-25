@@ -1,3 +1,51 @@
+from pyspark.sql import SparkSession
+
+spark = SparkSession.builder.appName("CustomParser").getOrCreate()
+
+# Step 1: Read raw file line by line
+df_raw = spark.read.text("input_3_c.csv")
+
+lines = df_raw.rdd.map(lambda x: x[0]).collect()
+
+rows = []
+buffer = ""
+
+for line in lines:
+    if buffer:
+        buffer += "\n" + line
+    else:
+        buffer = line
+
+    # 🔥 End of one record
+    if buffer.strip().endswith(';"'):
+        rows.append(buffer)
+        buffer = ""
+
+# Step 2: Split into columns
+parsed_data = []
+
+for row in rows:
+    try:
+        first_comma = row.find(',')
+        second_comma = row.find(',', first_comma + 1)
+
+        date = row[:first_comma]
+        user = row[first_comma + 1:second_comma]
+        sql = row[second_comma + 1:].strip()
+
+        # 🔥 Remove inner quotes only
+        sql = sql.replace('""', '"').replace('"', '')
+
+        parsed_data.append((date, user, sql))
+
+    except:
+        continue
+
+# Step 3: Create DataFrame
+df = spark.createDataFrame(parsed_data, ["Metric_Date", "Username", "SqlTextInfo"])
+
+df.show(truncate=False)
+----------------------------------
 from pyspark.sql.functions import udf
 from pyspark.sql.types import StringType
 
