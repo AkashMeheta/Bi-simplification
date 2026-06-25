@@ -2,9 +2,8 @@ from pyspark.sql import SparkSession
 
 spark = SparkSession.builder.appName("CustomParser").getOrCreate()
 
-# Step 1: Read raw file line by line
+# Step 1: Read raw file
 df_raw = spark.read.text("input_3_c.csv")
-
 lines = df_raw.rdd.map(lambda x: x[0]).collect()
 
 rows = []
@@ -16,33 +15,37 @@ for line in lines:
     else:
         buffer = line
 
-    # 🔥 End of one record
+    # End of one record
     if buffer.strip().endswith(';"'):
         rows.append(buffer)
         buffer = ""
 
-# Step 2: Split into columns
+# Step 2: Parse based on NEW order
 parsed_data = []
 
 for row in rows:
     try:
-        first_comma = row.find(',')
-        second_comma = row.find(',', first_comma + 1)
+        # Find LAST two commas (since SQL can contain commas)
+        last_comma = row.rfind(',')
+        second_last_comma = row.rfind(',', 0, last_comma)
 
-        date = row[:first_comma]
-        user = row[first_comma + 1:second_comma]
-        sql = row[second_comma + 1:].strip()
+        sql = row[:second_last_comma].strip()
+        user = row[second_last_comma + 1:last_comma].strip()
+        date = row[last_comma + 1:].strip()
 
-        # 🔥 Remove inner quotes only
-        sql = sql.replace('""', '"').replace('"', '')
+        # 🔥 Clean SQL (keep outer quotes, remove inner quotes)
+        if sql.startswith('"') and sql.endswith('"'):
+            inner_sql = sql[1:-1]
+            inner_sql = inner_sql.replace('""', '"').replace('"', '')
+            sql = f'"{inner_sql}"'
 
-        parsed_data.append((date, user, sql))
+        parsed_data.append((sql, user, date))
 
-    except:
+    except Exception as e:
         continue
 
 # Step 3: Create DataFrame
-df = spark.createDataFrame(parsed_data, ["Metric_Date", "Username", "SqlTextInfo"])
+df = spark.createDataFrame(parsed_data, ["SqlTextInfo", "users", "Metric_Date"])
 
 df.show(truncate=False)
 ----------------------------------
