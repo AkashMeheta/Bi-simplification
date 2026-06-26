@@ -1,3 +1,28 @@
+import requests
+
+url = "https://liteLLM.ai-coe-test.aws.evernorthcloud.com/v1/chat/completions"
+
+headers = {
+    "Authorization": "Bearer YOUR_API_KEY",
+    "Content-Type": "application/json"
+}
+
+data = {
+    "model": "claude-sonnet-4-6",  # confirm exact name from your system
+    "messages": [
+        {"role": "user", "content": prompt}
+    ],
+    "temperature": 0.2
+}
+
+response = requests.post(url, headers=headers, json=data)
+
+print(response.json())
+
+
+
+
+
 # =============================================================================
 # Teradata Query Usage Metrics Pipeline — Pure Python (No PySpark)
 # Works on any Windows VDI / local machine
