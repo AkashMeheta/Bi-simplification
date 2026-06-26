@@ -1,3 +1,33 @@
+
+
+from pyspark.sql.functions import col
+
+jp = spark.table("join_patterns")
+md = spark.table("metadata_table")
+
+# Left join
+df = jp.join(
+    md,
+    (jp.left_db_name == md.database_name) & 
+    (jp.left_table_name == md.table_name),
+    "left"
+).withColumnRenamed("product_id", "left_product_id")
+
+# Right join
+df = df.join(
+    md,
+    (df.right_db_name == md.database_name) & 
+    (df.right_table_name == md.table_name),
+    "left"
+).withColumnRenamed("product_id", "right_product_id")
+
+df.show()
+
+
+
+
+
+
 import requests
 
 url = "https://liteLLM.ai-coe-test.aws.evernorthcloud.com/v1/chat/completions"
