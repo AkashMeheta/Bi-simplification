@@ -4,6 +4,32 @@
 # Flow: Fetch 4 Delta tables → Build prompt → Call LiteLLM API → Save CSV
 # =============================================================================
 
+
+from pyspark.sql import SparkSession
+from pyspark.sql.window import Window
+from pyspark.sql.functions import row_number, col
+
+# Create Spark session
+spark = SparkSession.builder.appName("RowWidExample").getOrCreate()
+
+# Read CSV
+df = spark.read.csv("/path/to/file.csv", header=True, inferSchema=True)
+
+# Define window (order by any column or multiple columns)
+window_spec = Window.orderBy(col("your_column_name"))
+
+# Add incremental row_wid
+df_with_id = df.withColumn("row_wid", row_number().over(window_spec))
+
+# Save as table
+df_with_id.write.mode("overwrite").saveAsTable("your_database.your_table")
+
+
+
+
+
+
+
 import json
 import requests
 from pyspark.sql import SparkSession
