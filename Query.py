@@ -1,121 +1,74 @@
 import re
-import csv
-import io
+import time
 
-# Adjust this to match wherever your file actually lives
+# ---- CONFIG ----
 input_path = "/Volumes/your_catalog/your_schema/your_volume/queries.csv"
-skipped_log_path = "/Volumes/your_catalog/your_schema/your_volume/skipped_queries.txt"
+output_path = "/Volumes/your_catalog/your_schema/your_volume/queries_cleaned.csv"
+TRAILING_FIELDS = 2  # LogDate, starttime — adjust if your real file has more
 
-def repair_csv_lines(filepath):
-    with open(filepath, encoding="utf-8") as f:
-        raw = f.read()
+start = time.time()
 
-    lines = raw.split("\n")
-    header = lines[0]
-    body_lines = lines[1:]
+with open(input_path, encoding="utf-8") as f:
+    raw = f.read()
 
-    repaired_rows = []
-    buffer = ""
-    START_PATTERN = re.compile(r"^[\w\-\.]+,[\w\-\.]+,[\w\-\.]+,\"")
+lines = raw.split("\n")
+header = lines[0]
+body = lines[1:]
 
-    for line in body_lines:
-        if START_PATTERN.match(line) and buffer:
-            repaired_rows.append(buffer)
-            buffer = line
-        else:
-            buffer = buffer + "\n" + line if buffer else line
-    if buffer:
-        repaired_rows.append(buffer)
+# Step 1: Reassemble logical rows (a row may span multiple physical lines
+# because sqlQueryTxt contains embedded newlines).
+# A new row starts when a line begins with: field1,field2,field3,"
+START_PATTERN = re.compile(r'^[^,]+,[^,]+,[^,]+,"')
 
-    return header, repaired_rows
-
-
-def fix_and_split_row(row_text):
-    parts = row_text.split(",", 3)
-    if len(parts) < 4:
-        return None
-
-    prefix = parts[:3]
-    rest = parts[3]
-
-    tail_match = re.search(r'",(\d{4}-\d{2}-\d{2}),(\d{2}:\d{2}:\d{2})\s*$', rest)
-    if not tail_match:
-        return None
-
-    query_field = rest[1:tail_match.start()]
-    log_date, start_time = tail_match.group(1), tail_match.group(2)
-    fixed_query = query_field.replace('"', '""')
-
-    return prefix + [fixed_query, log_date, start_time]
-
-
-header, raw_rows = repair_csv_lines(input_path)
-good_rows = []
-skipped_rows = []
-
-for row_text in raw_rows:
-    result = fix_and_split_row(row_text)
-    if result is None:
-        skipped_rows.append(row_text)
+rows = []
+buffer = []
+for line in body:
+    if START_PATTERN.match(line) and buffer:
+        rows.append("\n".join(buffer))
+        buffer = [line]
     else:
-        good_rows.append(result)
+        buffer.append(line)
+if buffer:
+    rows.append("\n".join(buffer))
 
-print(f"Parsed OK: {len(good_rows)}, Skipped: {len(skipped_rows)}")
+print(f"Reassembled {len(rows)} logical rows in {time.time()-start:.2f}s")
 
-# Write skipped rows to log
-if skipped_rows:
-    with open(skipped_log_path, "w", encoding="utf-8") as f:
-        f.write("\n---ROW---\n".join(skipped_rows))
-def repair_csv_lines(filepath):
+# Step 2: For each row, split off the first 3 fields, then find the
+# sqlQueryTxt field by locating the outer quotes that wrap it, using the
+# known number of trailing fields as an anchor from the end of the row.
+row_regex = re.compile(
+    r'^(?P<prefix>[^,]+,[^,]+,[^,]+),"(?P<query>.*)"' +
+    r'(?P<trailing>(?:,"[^"]*"){' + str(TRAILING_FIELDS) + r'})$',
+    re.DOTALL
+)
 
-    with open(filepath, encoding="utf-8") as f:
+cleaned_rows = []
+skipped = []
 
-        raw = f.read()
+t2 = time.time()
+for row in rows:
+    m = row_regex.match(row)
+    if not m:
+        skipped.append(row)
+        continue
+    prefix = m.group("prefix")
+    query = m.group("query")
+    trailing = m.group("trailing")
 
+    # Strip ALL internal double quotes from the query content only
+    cleaned_query = query.replace('"', '')
 
+    cleaned_rows.append(f'{prefix},"{cleaned_query}"{trailing}')
 
-    lines = raw.split("\n")
+print(f"Cleaned {len(cleaned_rows)} rows, skipped {len(skipped)} in {time.time()-t2:.2f}s")
 
-    header = lines[0]
+# Step 3: Write output
+with open(output_path, "w", encoding="utf-8") as f:
+    f.write(header + "\n")
+    f.write("\n".join(cleaned_rows))
 
-    body_lines = lines[1:]
+if skipped:
+    with open(output_path.replace(".csv", "_skipped.txt"), "w", encoding="utf-8") as f:
+        f.write("\n---ROW---\n".join(skipped))
 
-
-
-    repaired_rows = []
-
-    buffer_parts = []
-
-    START_PATTERN = re.compile(r"^[\w\-\.]+,[\w\-\.]+,[\w\-\.]+,\"")
-
-
-
-    for line in body_lines:
-
-        if START_PATTERN.match(line) and buffer_parts:
-
-            repaired_rows.append("\n".join(buffer_parts))
-
-            buffer_parts = [line]
-
-        else:
-
-            buffer_parts.append(line)
-
-    if buffer_parts:
-
-        repaired_rows.append("\n".join(buffer_parts))
-
-
-
-    return header, repaired_rows.  for i, row_text in enumerate(raw_rows):
-
-    if i % 1000 == 0:
-
-        print(f"Processed {i}/{len(raw_rows)} rows...")
-
-    result = fix_and_split_row(row_text)
-
-    ...test_line = 'alice,mydb,mytable,"SELECT...'
-
-print(bool(START_PATTERN.match(test_line)))
+print(f"Total time: {time.time()-start:.2f}s")
