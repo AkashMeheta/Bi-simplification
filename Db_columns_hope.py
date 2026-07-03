@@ -88,6 +88,38 @@ def _detect_format(csv_path: str) -> str:
     return "standard_format"
 
 
+import re as _re
+
+
+def _normalize_date(date_str: str) -> str:
+    """
+    Normalize a date string to YYYY-MM-DD, the format STEP 1's RECORD_RE
+    requires. Handles:
+      • YYYY-MM-DD        -> unchanged
+      • DD/MM-YYYY         -> rearranged  (e.g. 29/02/2026 -> 2026-02-29)
+      • YYYY/MM/DD         -> rearranged
+    Any other/unrecognized shape is returned unchanged (STEP 1 will simply
+    fail to match it and it'll be excluded — same as before this fix, but
+    now only for genuinely unexpected formats instead of every row).
+    """
+    date_str = date_str.strip()
+
+    if _re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+        return date_str
+
+    m = _re.match(r'^(\d{1,2})/(\d{1,2})/(\d{4})$', date_str)
+    if m:
+        dd, mm, yyyy = m.groups()
+        return f"{yyyy}-{mm.zfill(2)}-{dd.zfill(2)}"  # assumes DD/MM/YYYY
+
+    m = _re.match(r'^(\d{4})/(\d{1,2})/(\d{1,2})$', date_str)
+    if m:
+        yyyy, mm, dd = m.groups()
+        return f"{yyyy}-{mm.zfill(2)}-{dd.zfill(2)}"
+
+    return date_str  # unrecognized — left as-is
+
+
 def _write_temp_csv(rows_out, source_label: str) -> str:
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=".csv", delete=False, encoding="utf-8"
@@ -113,7 +145,7 @@ def _convert_new_csv_to_input_format(src_path: str) -> str:
         reader = csv.DictReader(fh)
         for row in reader:
             sql_raw  = (row.get("SqlTextInfo") or "").strip()
-            log_date = (row.get("LogDate") or "").strip()
+            log_date = _normalize_date((row.get("LogDate") or "").strip())
             user     = (row.get("user_name") or "").strip()
 
             if not sql_raw or not log_date or not user:
@@ -171,7 +203,7 @@ def _convert_unquoted_csv_to_input_format(src_path: str) -> str:
 
             sql_raw, log_date, user = parts
             sql_raw  = sql_raw.strip()
-            log_date = log_date.strip()
+            log_date = _normalize_date(log_date.strip())
             user     = user.strip()
 
             if not sql_raw or not log_date or not user:
