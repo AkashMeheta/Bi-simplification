@@ -95,9 +95,12 @@ def _normalize_date(date_str: str) -> str:
     """
     Normalize a date string to YYYY-MM-DD, the format STEP 1's RECORD_RE
     requires. Handles:
-      • YYYY-MM-DD        -> unchanged
-      • DD/MM-YYYY         -> rearranged  (e.g. 29/02/2026 -> 2026-02-29)
-      • YYYY/MM/DD         -> rearranged
+      • YYYY-MM-DD                          -> unchanged
+      • YYYY-MM-DDTHH:MM:SS(.ffffff)?Z?      -> date part only
+                                                (e.g. 2026-06-25T14:48:39.466Z
+                                                 -> 2026-06-25)
+      • DD/MM/YYYY                           -> rearranged (e.g. 29/02/2026 -> 2026-02-29)
+      • YYYY/MM/DD                           -> rearranged
     Any other/unrecognized shape is returned unchanged (STEP 1 will simply
     fail to match it and it'll be excluded — same as before this fix, but
     now only for genuinely unexpected formats instead of every row).
@@ -106,6 +109,11 @@ def _normalize_date(date_str: str) -> str:
 
     if _re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
         return date_str
+
+    # ISO 8601 timestamp, e.g. 2026-06-25T14:48:39.466Z — keep date part only
+    m = _re.match(r'^(\d{4}-\d{2}-\d{2})[T ]\d{2}:\d{2}:\d{2}', date_str)
+    if m:
+        return m.group(1)
 
     m = _re.match(r'^(\d{1,2})/(\d{1,2})/(\d{4})$', date_str)
     if m:
