@@ -70,8 +70,21 @@ APP_PREFIXES = ("svp", "ovt", "dt")        # case-insensitive prefix → app
 
 import csv
 import os
+import sys
 import tempfile
 import atexit
+
+# Default csv field size limit (~131072 bytes) is too small for large
+# multiline SQL text fields in big exports — raise it. sys.maxsize can raise
+# OverflowError on platforms where the C `long` is 32-bit (e.g. some Windows
+# builds), so step down until it's accepted.
+_new_limit = sys.maxsize
+while True:
+    try:
+        csv.field_size_limit(_new_limit)
+        break
+    except OverflowError:
+        _new_limit = int(_new_limit / 10)
 
 
 def _peek_lines(csv_path: str, n: int = 2):
