@@ -10,12 +10,15 @@
 #   Left_Table_Name          – name of the FROM (left) table
 #   Right_Table_Database     – schema/db of the JOIN (right) table
 #   Right_Table_Name         – name of the JOIN (right) table
+#   Right_Table_Columns      – comma-separated list of columns fetched/used
+#                              from the right (JOIN) table anywhere in the
+#                              query (select list, ON, WHERE, GROUP BY, etc.)
 #   Join_Type                – INNER / LEFT / RIGHT / FULL / JOIN
 #   Join_Keys                – comma-separated ON clause column names
-#   Join_Count               – # times this exact join pair appears on that date
-#   Distinct_Users           – # unique human users who ran a query with this join
-#   Distinct_Apps            – # unique app accounts who ran a query with this join
-#   Created_Timestamp        – timestamp when this script ran
+#   Join_Count                – # times this exact join pair appears on that date
+#   Distinct_Users            – # unique human users who ran a query with this join
+#   Distinct_Apps             – # unique app accounts who ran a query with this join
+#   Created_Timestamp         – timestamp when this script ran
 #
 # App detection rule (case-insensitive prefix match) — extend APP_PREFIXES below:
 #   username starts with any prefix in APP_PREFIXES  →  APP,  else  →  USER
@@ -121,6 +124,33 @@ def resolve_join_table(join_this):
     return None
 
 
+def extract_right_table_columns(select, alias: str) -> str:
+    """
+    Find every column in this SELECT scope (select list, WHERE, ON,
+    GROUP BY, HAVING, QUALIFY, ORDER BY — find_all walks the whole
+    subtree) that is qualified with the given table/alias, i.e. the
+    columns actually "fetched"/referenced against the right-hand JOIN
+    table.
+
+    e.g.  SELECT a.id, b.name, b.amt FROM t1 a JOIN t2 b ON a.id=b.id
+          alias="b"  →  "NAME, AMT, ID"  (any column referenced on b,
+          including join keys, is included)
+
+    Deduped, preserving first-seen order. Returns "" if no alias or
+    no qualified columns are found (e.g. columns referenced without a
+    table qualifier).
+    """
+    if not alias:
+        return ""
+    cols = []
+    for col in select.find_all(exp.Column):
+        tbl_node = col.args.get("table")
+        tbl_name = tbl_node.name if tbl_node else None
+        if tbl_name and tbl_name.upper() == alias.upper() and col.name:
+            cols.append(col.name.upper())
+    return ", ".join(dict.fromkeys(cols))
+
+
 def extract_join_keys(on_expr) -> str:
     """
     Extract column names used as join keys from an ON expression.
@@ -142,7 +172,8 @@ def extract_joins(raw_sql: str) -> tuple:
     Parse one SQL string and return (join_list, skip_reason).
 
     join_list — list of dicts with keys:
-        left_db, left_tbl, right_db, right_tbl, join_type, join_keys
+        left_db, left_tbl, right_db, right_tbl, join_type, join_keys,
+        right_columns
 
     skip_reason — None if OK, string if the SQL was unparseable/utility.
 
@@ -151,6 +182,8 @@ def extract_joins(raw_sql: str) -> tuple:
         • Subquery JOINs  (resolves to subquery's own FROM table)
         • UNION queries   (walks every SELECT scope independently)
         • Multi-key ON    (a.id=b.id AND a.type=b.type)
+        • Right-table column usage (any column referenced against the
+          JOIN table's alias anywhere in that SELECT scope)
     """
     sql         = raw_sql.replace('""', '"').strip()
     sql         = re.sub(r'--[^\n]*', '', sql)      # strip line comments
@@ -195,13 +228,20 @@ def extract_joins(raw_sql: str) -> tuple:
                     join_type = str(join.args.get("kind") or "").upper() or "JOIN"
                     join_keys = extract_join_keys(join.args.get("on"))
 
+                    # Alias actually used to qualify columns in the SQL
+                    # (falls back to the real table name when no alias
+                    # was assigned to the JOIN'd table/subquery).
+                    right_alias = join.this.alias_or_name or right_tbl
+                    right_columns = extract_right_table_columns(select, right_alias)
+
                     results.append({
-                        "left_db"  : left_db,
-                        "left_tbl" : left_tbl,
-                        "right_db" : right_db,
-                        "right_tbl": right_tbl,
-                        "join_type": join_type,
-                        "join_keys": join_keys,
+                        "left_db"      : left_db,
+                        "left_tbl"     : left_tbl,
+                        "right_db"     : right_db,
+                        "right_tbl"    : right_tbl,
+                        "join_type"    : join_type,
+                        "join_keys"    : join_keys,
+                        "right_columns": right_columns,
                     })
 
     except Exception as exc:
@@ -237,15 +277,16 @@ for raw_sql, date, user in raw_records:
 
     for j in joins:
         exploded.append({
-            "Log_Date"  : date,
-            "left_db"   : j["left_db"],
-            "left_tbl"  : j["left_tbl"],
-            "right_db"  : j["right_db"],
-            "right_tbl" : j["right_tbl"],
-            "join_type" : j["join_type"],
-            "join_keys" : j["join_keys"],
-            "username"  : user,
-            "acct_type" : acct,
+            "Log_Date"     : date,
+            "left_db"      : j["left_db"],
+            "left_tbl"     : j["left_tbl"],
+            "right_db"     : j["right_db"],
+            "right_tbl"    : j["right_tbl"],
+            "join_type"    : j["join_type"],
+            "join_keys"    : j["join_keys"],
+            "right_columns": j["right_columns"],
+            "username"     : user,
+            "acct_type"    : acct,
         })
 
 print(f"[INFO] Exploded join rows (before agg) : {len(exploded)}")
@@ -261,10 +302,12 @@ df_exp = pd.DataFrame(exploded)
 # STEP 4 — Aggregate
 # =============================================================================
 # Group by (Log_Date, left_db, left_tbl, right_db, right_tbl, join_type, join_keys)
-# Compute: Join_Count, Distinct_Users, Distinct_Apps
+# Compute: Join_Count, Distinct_Users, Distinct_Apps, Right_Table_Columns
 #
 # Uses three separate groupby passes (avoids the lambda-closure bug where
-# every group reports distinct count = 1).
+# every group reports distinct count = 1), plus a fourth pass that unions
+# every right-table column string seen within a group (different queries
+# hitting the same join pair may reference different column subsets).
 # =============================================================================
 
 GRP_KEYS = [
@@ -288,8 +331,27 @@ df_count = (df_exp.groupby(GRP_KEYS)["username"]
             .count()
             .rename("Join_Count"))
 
-df_agg = (pd.concat([df_count, df_users, df_apps], axis=1)
-            .fillna(0)
+
+def _union_columns(series: pd.Series) -> str:
+    """Union all comma-separated column lists within a group, deduped,
+    preserving first-seen order across rows."""
+    seen = {}
+    for val in series:
+        if not val:
+            continue
+        for col in val.split(","):
+            col = col.strip()
+            if col:
+                seen[col] = True
+    return ", ".join(seen.keys())
+
+
+df_right_cols = (df_exp.groupby(GRP_KEYS)["right_columns"]
+                  .apply(_union_columns)
+                  .rename("Right_Table_Columns"))
+
+df_agg = (pd.concat([df_count, df_users, df_apps, df_right_cols], axis=1)
+            .fillna({"Distinct_Users": 0, "Distinct_Apps": 0, "Right_Table_Columns": ""})
             .astype({"Distinct_Users": int, "Distinct_Apps": int})
             .reset_index()
             .sort_values(GRP_KEYS)
@@ -317,6 +379,7 @@ df_final = df_agg.rename(columns={
     "Left_Table_Name",
     "Right_Table_Database",
     "Right_Table_Name",
+    "Right_Table_Columns",
     "Join_Type",
     "Join_Keys",
     "Join_Count",
@@ -363,8 +426,9 @@ THIN_BORDER  = Border(
     bottom = Side(style="thin", color="D0D0D0"),
 )
 
-# Col indices for centre-align (1-based): Row_Wid, Join_Count, Distinct_*, Join_Type
-CENTRE_COLS = {1, 7, 9, 10, 11}
+# Col indices for centre-align (1-based):
+# Row_Wid(1), Join_Type(8), Join_Count(10), Distinct_Users(11), Distinct_Apps(12)
+CENTRE_COLS = {1, 8, 10, 11, 12}
 
 # Header row
 for cell in ws[1]:
@@ -394,12 +458,13 @@ col_widths = {
     4 : 35,  # Left_Table_Name
     5 : 22,  # Right_Table_Database
     6 : 35,  # Right_Table_Name
-    7 : 10,  # Join_Type
-    8 : 30,  # Join_Keys
-    9 : 12,  # Join_Count
-    10: 15,  # Distinct_Users
-    11: 14,  # Distinct_Apps
-    12: 22,  # Created_Timestamp
+    7 : 40,  # Right_Table_Columns
+    8 : 10,  # Join_Type
+    9 : 30,  # Join_Keys
+    10: 12,  # Join_Count
+    11: 15,  # Distinct_Users
+    12: 14,  # Distinct_Apps
+    13: 22,  # Created_Timestamp
 }
 for col_num, width in col_widths.items():
     ws.column_dimensions[get_column_letter(col_num)].width = width
