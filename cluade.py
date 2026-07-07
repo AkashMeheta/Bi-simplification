@@ -72,26 +72,32 @@ df.write.mode("overwrite").option("overwriteSchema", "
 ____45
 
 
-
 from pyspark.sql import functions as F
 from pyspark.sql.types import StringType
 
-# 1. Read everything as STRING first — never let spark infer timestamp on read
+# 1. Read everything as STRING — never let Spark infer timestamp on read
 raw_df = spark.read.csv(
     "/path/to/your.csv",
     header=True,
-    inferSchema=False,     # force everything to string
-    multiLine=True,        # in case sqlQueryTxt spans multiple lines
+    inferSchema=False,
+    multiLine=True,
     escape='"',
     quote='"'
 )
 
-# Force-cast known columns to string just to be safe
-for c in ["starttime", "LastResponseTime"]:
-    raw_df = raw_df.withColumn(c, F.col(c).cast(StringType()))
+# 2. Resolve actual column names case-insensitively (fixes the StartTime/starttime mismatch)
+def resolve_col(df, expected_name):
+    matches = [c for c in df.columns if c.lower() == expected_name.lower()]
+    if not matches:
+        raise ValueError(f"Column '{expected_name}' not found. Available columns: {df.columns}")
+    return matches[0]
 
-# 2. Define all the timestamp formats you've actually seen in the data
-#    (add/remove based on what your CSV sources actually contain)
+col_logdate       = resolve_col(raw_df, "LogDate")
+col_sqltxt        = resolve_col(raw_df, "sqlQueryTxt")
+col_starttime     = resolve_col(raw_df, "starttime")
+col_lastresponse  = resolve_col(raw_df, "LastResponseTime")
+
+# 3. Timestamp formats seen across sources
 TIMESTAMP_FORMATS = [
     "yyyy-MM-dd HH:mm:ss.SSSSSS",
     "yyyy-MM-dd HH:mm:ss.SSS",
@@ -104,84 +110,37 @@ TIMESTAMP_FORMATS = [
     "yyyy/MM/dd HH:mm:ss",
 ]
 
-def normalize_timestamp_col(df, colname):
-    """
-    Try each format in order; first non-null match wins.
-    Blank/null/unparseable -> stays null (don't fabricate a value).
-    """
+def build_timestamp_expr(colname):
+    """Returns a single coalesce expression trying every format, without any withColumn loop."""
     trimmed = F.trim(F.col(colname))
-    # Treat empty string as null upfront
     cleaned = F.when(trimmed == "", None).otherwise(trimmed)
-
     attempts = [F.to_timestamp(cleaned, fmt) for fmt in TIMESTAMP_FORMATS]
-    normalized = F.coalesce(*attempts)
+    return F.coalesce(*attempts)
 
-    return df.withColumn(colname + "_ts", normalized)
+# 4. Build every output column expression up front (list comprehension, not a withColumn loop)
+starttime_ts_expr    = build_timestamp_expr(col_starttime)
+lastresponse_ts_expr = build_timestamp_expr(col_lastresponse)
 
-# 3. Apply to both timestamp columns
-df = normalize_timestamp_col(raw_df, "starttime")
-df = normalize_timestamp_col(raw_df, "LastResponseTime")
+select_exprs = [
+    F.col(col_logdate).alias("LogDate"),
+    F.col(col_sqltxt).alias("sqlQueryTxt"),
+    starttime_ts_expr.alias("starttime"),
+    lastresponse_ts_expr.alias("LastResponseTime"),
+    # Audit flags for rows where the raw value was non-blank but still failed to parse
+    (
+        F.col(col_starttime).isNotNull()
+        & (F.trim(F.col(col_starttime)) != "")
+        & starttime_ts_expr.isNull()
+    ).alias("starttime_parse_failed"),
+    (
+        F.col(col_lastresponse).isNotNull()
+        & (F.trim(F.col(col_lastresponse)) != "")
+        & lastresponse_ts_expr.isNull()
+    ).alias("lastresponsetime_parse_failed"),
+]
 
-# 4. Optional: flag rows where parsing failed but original value wasn't blank
-#    (useful for a rejects/audit log, similar to your skipped_queries.txt pattern)
-df = df.withColumn(
-    "starttime_parse_failed",
-    (F.col("starttime").isNotNull()) & (F.trim(F.col("starttime")) != "") & (F.col("starttime_ts").isNull())
-).withColumn(
-    "LastResponseTime_parse_failed",
-    (F.col("LastResponseTime").isNotNull()) & (F.trim(F.col("LastResponseTime")) != "") & (F.col("LastResponseTime_ts").isNull())
-)
+# 5. Single select — one projection, one pass, Catalyst optimizes it as a whole
+final_df = raw_df.select(*select_exprs)
 
-# 5. Swap in the real timestamp columns and drop the raw strings + helper cols
-final_df = (
-    df.drop("starttime", "LastResponseTime")
-      .withColumnRenamed("starttime_ts", "starttime")
-      .withColumnRenamed("LastResponseTime_ts", "LastResponseTime")
-)
-
-# 6. Write to Delta / Unity Catalog table with proper timestamp types
+# 6. Write to Delta / Unity Catalog with proper timestamp types
 final_df.write.mode("overwrite").format("delta").saveAsTable("your_catalog.your_schema.your_table")
-
-
-_______
-
-
-WITH query_counts AS (
-
-    SELECT 
-
-        LogDate,
-
-        SqlTextInfo,
-
-        COUNT(*) AS usage_count
-
-    FROM your_table
-
-    GROUP BY LogDate, SqlTextInfo
-
-),
-
-ranked_queries AS (
-
-    SELECT *,
-
-           ROW_NUMBER() OVER (PARTITION BY LogDate ORDER BY usage_count DESC) AS rn
-
-    FROM query_counts
-
-)
-
-SELECT 
-
-    LogDate,
-
-    SqlTextInfo AS most_used_query,
-
-    usage_count
-
-FROM ranked_queries
-
-WHERE rn = 1
-
-ORDER BY LogDate DESC;
