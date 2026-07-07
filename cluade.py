@@ -69,11 +69,81 @@ df = df.drop("start_time", "end_time")
 # 🔹 5. Overwrite table with new column
 df.write.mode("overwrite").option("overwriteSchema", "
 
+____45
 
 
 
+from pyspark.sql import functions as F
+from pyspark.sql.types import StringType
+
+# 1. Read everything as STRING first — never let spark infer timestamp on read
+raw_df = spark.read.csv(
+    "/path/to/your.csv",
+    header=True,
+    inferSchema=False,     # force everything to string
+    multiLine=True,        # in case sqlQueryTxt spans multiple lines
+    escape='"',
+    quote='"'
+)
+
+# Force-cast known columns to string just to be safe
+for c in ["starttime", "LastResponseTime"]:
+    raw_df = raw_df.withColumn(c, F.col(c).cast(StringType()))
+
+# 2. Define all the timestamp formats you've actually seen in the data
+#    (add/remove based on what your CSV sources actually contain)
+TIMESTAMP_FORMATS = [
+    "yyyy-MM-dd HH:mm:ss.SSSSSS",
+    "yyyy-MM-dd HH:mm:ss.SSS",
+    "yyyy-MM-dd HH:mm:ss",
+    "yyyy-MM-dd'T'HH:mm:ss.SSSSSS",
+    "yyyy-MM-dd'T'HH:mm:ss",
+    "MM/dd/yyyy HH:mm:ss",
+    "dd/MM/yyyy HH:mm:ss",
+    "MM-dd-yyyy HH:mm:ss",
+    "yyyy/MM/dd HH:mm:ss",
+]
+
+def normalize_timestamp_col(df, colname):
+    """
+    Try each format in order; first non-null match wins.
+    Blank/null/unparseable -> stays null (don't fabricate a value).
+    """
+    trimmed = F.trim(F.col(colname))
+    # Treat empty string as null upfront
+    cleaned = F.when(trimmed == "", None).otherwise(trimmed)
+
+    attempts = [F.to_timestamp(cleaned, fmt) for fmt in TIMESTAMP_FORMATS]
+    normalized = F.coalesce(*attempts)
+
+    return df.withColumn(colname + "_ts", normalized)
+
+# 3. Apply to both timestamp columns
+df = normalize_timestamp_col(raw_df, "starttime")
+df = normalize_timestamp_col(raw_df, "LastResponseTime")
+
+# 4. Optional: flag rows where parsing failed but original value wasn't blank
+#    (useful for a rejects/audit log, similar to your skipped_queries.txt pattern)
+df = df.withColumn(
+    "starttime_parse_failed",
+    (F.col("starttime").isNotNull()) & (F.trim(F.col("starttime")) != "") & (F.col("starttime_ts").isNull())
+).withColumn(
+    "LastResponseTime_parse_failed",
+    (F.col("LastResponseTime").isNotNull()) & (F.trim(F.col("LastResponseTime")) != "") & (F.col("LastResponseTime_ts").isNull())
+)
+
+# 5. Swap in the real timestamp columns and drop the raw strings + helper cols
+final_df = (
+    df.drop("starttime", "LastResponseTime")
+      .withColumnRenamed("starttime_ts", "starttime")
+      .withColumnRenamed("LastResponseTime_ts", "LastResponseTime")
+)
+
+# 6. Write to Delta / Unity Catalog table with proper timestamp types
+final_df.write.mode("overwrite").format("delta").saveAsTable("your_catalog.your_schema.your_table")
 
 
+_______
 
 
 WITH query_counts AS (
