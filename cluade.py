@@ -9,7 +9,22 @@ GROUP BY SqlTextInfo
 ORDER BY execution_time DESC, last_used_date DESC
 LIMIT 10;
 
-
+SELECT 
+    SqlTextInfo,
+    usage_count,
+    last_used_date
+FROM (
+    SELECT 
+        SqlTextInfo,
+        COUNT(*) AS usage_count,
+        MAX(LogDate) AS last_used_date,
+        ROW_NUMBER() OVER (
+            ORDER BY COUNT(*) DESC, MAX(LogDate) DESC
+        ) AS rn
+    FROM your_table
+    GROUP BY SqlTextInfo
+) t
+WHERE rn <= 10;
 
 
 from pyspark.sql import SparkSession
