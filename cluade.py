@@ -1,40 +1,13 @@
-WITH query_lengths AS (
-
-    SELECT 
-
-        LogDate,
-
-        SqlTextInfo,
-
-        LENGTH(SqlTextInfo) AS query_length
-
-    FROM your_table
-
-),
-
-ranked_queries AS (
-
-    SELECT *,
-
-           ROW_NUMBER() OVER (PARTITION BY LogDate ORDER BY query_length DESC) AS rn
-
-    FROM query_lengths
-
-)
-
-SELECT 
-
-    LogDate,
-
-    SqlTextInfo AS longest_query,
-
-    query_length
-
-FROM ranked_queries
-
-WHERE rn = 1
-
-ORDER BY LogDate DESC;
+SELECT 
+    SqlTextInfo,
+    MAX(unix_timestamp(LastResponseTime) - unix_timestamp(StartTime)) AS execution_time,
+    MAX(LogDate) AS last_used_date
+FROM your_table
+WHERE LastResponseTime IS NOT NULL 
+  AND StartTime IS NOT NULL
+GROUP BY SqlTextInfo
+ORDER BY execution_time DESC, last_used_date DESC
+LIMIT 10;
 
 
 
