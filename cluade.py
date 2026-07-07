@@ -42,6 +42,11 @@ def build_timestamp_expr(colname):
     attempts = [F.try_to_timestamp(cleaned, F.lit(fmt)) for fmt in TIMESTAMP_FORMATS]
     return F.coalesce(*attempts)
 
+duration_seconds_expr = F.when(
+    starttime_ts_expr.isNotNull() & lastresponse_ts_expr.isNotNull() & (lastresponse_ts_expr > starttime_ts_expr),
+    lastresponse_ts_expr.cast("long") - starttime_ts_expr.cast("long")
+).otherwise(F.lit(None).cast("long"))
+
 starttime_ts_expr    = build_timestamp_expr(col_starttime)
 lastresponse_ts_expr = build_timestamp_expr(col_lastresponse)
 
