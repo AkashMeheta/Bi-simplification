@@ -39,7 +39,47 @@ ORDER BY LogDate DESC;
 
 
 
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import to_timestamp, coalesce, col, unix_timestamp, when
 
+spark = SparkSession.builder.getOrCreate()
+
+# 🔹 1. Read table
+df = spark.table("your_table")
+
+# 🔹 2. Parse timestamps safely (handle multiple formats)
+df = df.withColumn(
+    "start_time",
+    coalesce(
+        to_timestamp("StartTime", "yyyy-MM-dd'T'HH:mm:ss.SSSXXX"),
+        to_timestamp("StartTime", "yyyy-MM-dd HH:mm:ss.SSSSSS"),
+        to_timestamp("StartTime", "yyyy-MM-dd HH:mm:ss")
+    )
+).withColumn(
+    "end_time",
+    coalesce(
+        to_timestamp("LastResponseTime", "yyyy-MM-dd'T'HH:mm:ss.SSSXXX"),
+        to_timestamp("LastResponseTime", "yyyy-MM-dd HH:mm:ss.SSSSSS"),
+        to_timestamp("LastResponseTime", "yyyy-MM-dd HH:mm:ss")
+    )
+)
+
+# 🔹 3. Calculate execution time (in seconds)
+df = df.withColumn(
+    "total_execution_time",
+    when(
+        (col("start_time").isNotNull()) &
+        (col("end_time").isNotNull()) &
+        (unix_timestamp("end_time") >= unix_timestamp("start_time")),
+        unix_timestamp("end_time") - unix_timestamp("start_time")
+    ).otherwise(None)
+)
+
+# 🔹 4. Drop temp columns (optional)
+df = df.drop("start_time", "end_time")
+
+# 🔹 5. Overwrite table with new column
+df.write.mode("overwrite").option("overwriteSchema", "
 
 
 
