@@ -1,0 +1,32 @@
+SELECT 
+    o.ObjectDatabaseName AS data_product_name,
+    o.ObjectTableName AS data_product_object_name,
+    o.ObjectID AS data_product_object_id,
+
+    COUNT(DISTINCT l.QueryID) AS total_query_count,
+
+    COUNT(DISTINCT CASE 
+        WHEN l.UserName NOT LIKE ANY ('SVT%', 'ETL%', 'DBA%', 'OP%') 
+        THEN l.UserName 
+    END) AS unique_user,
+
+    COUNT(DISTINCT CASE 
+        WHEN l.UserName LIKE ANY ('SVT%', 'ETL%', 'DBA%', 'OP%') 
+        THEN l.UserName 
+    END) AS unique_app,
+
+    SUM((l.FirstRespTime - l.StartTime) DAY(4) TO SECOND(6)) AS total_execution_time,
+
+    AVG((l.FirstRespTime - l.StartTime) DAY(4) TO SECOND(6)) AS average_execution_time,
+
+    SUM(CASE WHEN l.ErrorCode <> 0 THEN 1 ELSE 0 END) AS failed_query_count
+
+FROM PDCRINFO.DBQLOGTBL_HST l
+JOIN PDCRINFO.DBQLogTbl_Hst o
+  ON l.QueryID = o.QueryID   -- ❌ Removed LogDate (important)
+
+WHERE o.ObjectDatabaseName IN (...)
+AND o.ObjectTableName IN (...)
+AND l.LogDate BETWEEN DATE-90 AND DATE-1
+
+GROUP BY 1,2,3;
