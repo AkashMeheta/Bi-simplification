@@ -45,7 +45,7 @@ APP_PREFIXES = ("svp", "ovt", "dt")        # case-insensitive prefix → app
 # =============================================================================
 # STEP 0 — Auto-detect & convert alternate CSV formats to expected input format
 # =============================================================================
-# Supports THREE input schemas, normalized into what STEP 1 expects:
+# Supports multiple input schemas, normalized into what STEP 1 expects:
 #
 #       SqlTextInfo,Metric_Date,users
 #       "<multiline SQL ending in ;>","YYYY-MM-DD",USERID
@@ -55,17 +55,21 @@ APP_PREFIXES = ("svp", "ovt", "dt")        # case-insensitive prefix → app
 #            LastResponseTime
 #   Detection: header contains "user_name" AND "logdate"
 #
-# Format B — "standard_format" (already correct, passthrough):
-#   Columns: SqlTextInfo, Metric_Date, users  (already quoted + ; terminated)
-#
-# Format C — "unquoted_format":
-#   Columns: SqlTextInfo, Metric_Date, users, but UNQUOTED, no semicolon:
-#       select * from t1,29/02/2026,user1
-#   We rsplit(",", 2) from the right (last two fields are always date/user;
-#   everything else, however many commas, is the SQL) and re-quote/escape.
+# Format B/C — "sql_users_format":
+#   Columns: SqlTextInfo, Metric_Date, users — handled regardless of quoting:
+#   fully quoted (standard), fully unquoted (select * from t1,29/02/2026,user1),
+#   or a MIX of both within the same file (a CSV writer using RFC-4180 minimal
+#   quoting only wraps a field in quotes when it needs to, e.g. the SQL
+#   contains a comma — so some rows may be quoted and others not). Every row
+#   is inspected and normalized on its own via csv.reader, so mixed quoting
+#   is handled correctly instead of guessing the whole file's format from
+#   just the first row.
 #
 # Dates are normalized to YYYY-MM-DD (required by STEP 1's RECORD_RE),
 # handling DD/MM/YYYY and ISO-8601 timestamps like 2026-06-25T14:48:39.466Z.
+#
+# csv.field_size_limit() is also raised, since the default (~131072 bytes)
+# is too small for large multiline SQL text fields in big exports.
 # =============================================================================
 
 import csv
@@ -133,22 +137,31 @@ def _peek_lines(csv_path: str, n: int = 2, encoding: str = "utf-8"):
 
 
 def _detect_format(csv_path: str, encoding: str = "utf-8") -> str:
-    lines = _peek_lines(csv_path, 2, encoding=encoding)
+    """
+    Only two schemas need distinguishing up front:
+      • "new_format"       — user_name/Db_nm/Tbl_nm/SqlTextInfo/LogDate/... columns
+      • "sql_users_format" — SqlTextInfo,Metric_Date,users columns (quoted,
+                              unquoted, or a MIX of both within the same file)
+
+    We deliberately do NOT try to decide "already fully quoted" vs "needs
+    conversion" here. A CSV writer using RFC-4180 minimal quoting only wraps
+    a field in quotes when it actually needs to — so a real file can easily
+    have some rows quoted and others not. Peeking at just the first data row
+    to guess the whole file's format misclassifies that kind of mixed file
+    and silently drops every row after the first mismatch. Instead,
+    _convert_sql_users_csv_to_input_format() below inspects EVERY row on
+    its own and normalizes it individually, so mixed quoting is a non-issue.
+    """
+    lines = _peek_lines(csv_path, 1, encoding=encoding)
     if not lines:
-        return "standard_format"
+        return "sql_users_format"
 
     header_clean = lines[0].strip().lower().replace('"', '')
 
     if "user_name" in header_clean and "logdate" in header_clean:
         return "new_format"
 
-    if "sqltextinfo" in header_clean and "metric_date" in header_clean and "users" in header_clean:
-        if len(lines) < 2:
-            return "standard_format"
-        first_data_row = lines[1].lstrip()
-        return "standard_format" if first_data_row.startswith('"') else "unquoted_format"
-
-    return "standard_format"
+    return "sql_users_format"
 
 
 def _normalize_date(date_str: str) -> str:
@@ -198,11 +211,20 @@ def _write_temp_csv(rows_out, source_label: str) -> str:
     return tmp.name
 
 
+def _normalize_sql_field(sql_raw: str) -> str:
+    """Guarantee exactly one trailing ';' and escape internal double-quotes
+    so the field is a valid RFC-4180 quoted string."""
+    sql_norm = sql_raw.strip().rstrip()
+    if not sql_norm.endswith(";"):
+        sql_norm += ";"
+    return sql_norm.replace('"', '""')
+
+
 def _convert_new_csv_to_input_format(src_path: str, encoding: str = "utf-8") -> str:
     rows_out = []
     # errors="replace" is a last-resort safety net: even after picking the
     # best-guess encoding from a sample, a handful of stray bytes further
-    # into a large file could still be off. Rather than crash the whole
+    # into a 160k-row file could still be off. Rather than crash the whole
     # pipeline on one bad byte, swap it for U+FFFD and keep going.
     with open(src_path, "r", encoding=encoding, errors="replace", newline="") as fh:
         reader = csv.DictReader(fh)
@@ -214,36 +236,50 @@ def _convert_new_csv_to_input_format(src_path: str, encoding: str = "utf-8") -> 
             if not sql_raw or not log_date or not user:
                 continue
 
-            sql_norm = sql_raw.rstrip()
-            if not sql_norm.endswith(";"):
-                sql_norm += ";"
-
-            sql_esc = sql_norm.replace('"', '""')
+            sql_esc = _normalize_sql_field(sql_raw)
             rows_out.append(f'"{sql_esc}","{log_date}",{user}')
 
     return _write_temp_csv(rows_out, "New CSV schema")
 
 
-def _convert_unquoted_csv_to_input_format(src_path: str, encoding: str = "utf-8") -> str:
+def _convert_sql_users_csv_to_input_format(src_path: str, encoding: str = "utf-8") -> str:
+    """
+    Handles SqlTextInfo,Metric_Date,users files regardless of quoting —
+    fully quoted (standard), fully unquoted, or a MIX of both across rows.
+
+    csv.reader() respects RFC-4180 quoting per field/row (including
+    embedded newlines inside quoted multiline SQL), so each row is read
+    correctly whether or not that particular row happened to need quotes.
+
+    The only case csv.reader can't disambiguate on its own is a row whose
+    SQL contains a comma that was NOT quoted/escaped at all — that row
+    parses into MORE than 3 fields. For those, we recombine: the last two
+    fields are always Metric_Date and users (neither contains commas), so
+    everything else — however many stray commas it has — is rejoined back
+    into the SQL text.
+    """
     rows_out = []
     with open(src_path, "r", encoding=encoding, errors="replace", newline="") as fh:
         reader = csv.reader(fh)
         header_skipped = False
-        for raw_fields in reader:
-            if not raw_fields or not any(f.strip() for f in raw_fields):
-                continue
-
-            line = ",".join(raw_fields)
+        for fields in reader:
+            if not fields or not any((f or "").strip() for f in fields):
+                continue  # skip blank lines
 
             if not header_skipped:
                 header_skipped = True
-                continue
+                continue  # skip header row
 
-            parts = line.rsplit(",", 2)
-            if len(parts) != 3:
-                continue
+            if len(fields) == 3:
+                sql_raw, log_date, user = fields
+            elif len(fields) > 3:
+                # Unescaped comma(s) inside an unquoted SQL field — rejoin.
+                sql_raw  = ",".join(fields[:-2])
+                log_date = fields[-2]
+                user     = fields[-1]
+            else:
+                continue  # malformed row — not enough fields, skip
 
-            sql_raw, log_date, user = parts
             sql_raw  = sql_raw.strip()
             log_date = _normalize_date(log_date.strip())
             user     = user.strip()
@@ -251,14 +287,10 @@ def _convert_unquoted_csv_to_input_format(src_path: str, encoding: str = "utf-8"
             if not sql_raw or not log_date or not user:
                 continue
 
-            sql_norm = sql_raw.rstrip()
-            if not sql_norm.endswith(";"):
-                sql_norm += ";"
-
-            sql_esc = sql_norm.replace('"', '""')
+            sql_esc = _normalize_sql_field(sql_raw)
             rows_out.append(f'"{sql_esc}","{log_date}",{user}')
 
-    return _write_temp_csv(rows_out, "Unquoted CSV schema")
+    return _write_temp_csv(rows_out, "SqlTextInfo/Metric_Date/users CSV")
 
 
 _src_encoding = _detect_source_encoding(INPUT_CSV)
@@ -268,44 +300,41 @@ _fmt = _detect_format(INPUT_CSV, encoding=_src_encoding)
 
 if _fmt == "new_format":
     INPUT_CSV = _convert_new_csv_to_input_format(INPUT_CSV, encoding=_src_encoding)
-    _step1_encoding = "utf-8"          # _write_temp_csv always writes UTF-8
-elif _fmt == "unquoted_format":
-    INPUT_CSV = _convert_unquoted_csv_to_input_format(INPUT_CSV, encoding=_src_encoding)
-    _step1_encoding = "utf-8"          # _write_temp_csv always writes UTF-8
 else:
-    print("[INFO] Standard CSV format detected — no conversion needed.")
-    # Passthrough case: INPUT_CSV is still the ORIGINAL file (not one of our
-    # own always-UTF-8 temp files), so STEP 1 must read it with the encoding
-    # we actually detected for it, not assume UTF-8.
-    _step1_encoding = _src_encoding
+    INPUT_CSV = _convert_sql_users_csv_to_input_format(INPUT_CSV, encoding=_src_encoding)
 
 
 # =============================================================================
 # STEP 1 — Read & parse the multiline CSV
 # =============================================================================
-# NOTE on approach: this was previously read in full into one giant string
-# and matched with a DOTALL regex over the whole body. That doesn't scale
-# well to large files with very large SqlTextInfo fields — it holds the
-# entire file (and every intermediate regex match) in memory at once, and a
-# single giant backtracking regex over a multi-hundred-MB string is slow
-# and can be fragile.
+# Record format:
+#   "SELECT ...
+#    multiline SQL ...
+#    WHERE x='Y';","YYYY-MM-DD",USERID
 #
-# In the "new_format"/"unquoted_format" cases, INPUT_CSV at this point is
-# our own temp file written by _write_temp_csv() in STEP 0 — always UTF-8,
-# always valid RFC-4180 CSV (quoted SQL field with internal quotes escaped
-# as "", quoted date, unquoted user). In the passthrough "standard_format"
-# case it's the original file read with the encoding we detected for it.
-# Either way we can stream it row-by-row with csv.reader (field_size_limit
-# raised above to handle very large SqlTextInfo values) instead of
-# re-parsing it with regex — bounded memory, much faster on large datasets.
+# NOTE on approach: this file was previously read in full into one giant
+# string and matched with a DOTALL regex over the whole body. That doesn't
+# scale well to 160k+ rows with very large SqlTextInfo fields — it holds
+# the entire file (and every intermediate regex match) in memory at once,
+# and a single giant backtracking regex over a multi-hundred-MB string is
+# slow and can be fragile.
+#
+# INPUT_CSV at this point is ALWAYS our own temp file written by
+# _write_temp_csv() in STEP 0 — always UTF-8, always valid RFC-4180 CSV
+# (quoted SQL field with internal quotes escaped as "", quoted date,
+# unquoted user). That means we can just stream it row-by-row with
+# csv.reader (which already has field_size_limit raised above to handle
+# very large SqlTextInfo values), instead of re-parsing it with regex.
+# This keeps memory bounded to one row at a time rather than the whole
+# file, and is dramatically faster on large datasets.
 # =============================================================================
 
 raw_records = []
 _skipped_bad_rows = 0
 
-with open(INPUT_CSV, "r", encoding=_step1_encoding, errors="replace", newline="") as fh:
+with open(INPUT_CSV, "r", encoding="utf-8", newline="") as fh:
     reader = csv.reader(fh)
-    next(reader, None)  # drop header row
+    next(reader, None)  # drop header row written by _write_temp_csv
 
     for fields in reader:
         if len(fields) < 3:
@@ -328,7 +357,6 @@ with open(INPUT_CSV, "r", encoding=_step1_encoding, errors="replace", newline=""
 print(f"[INFO] Records found in CSV : {len(raw_records)}")
 if _skipped_bad_rows:
     print(f"[INFO] Rows skipped (malformed) : {_skipped_bad_rows}")
-
 
 # =============================================================================
 # STEP 2 — Helpers
