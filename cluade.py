@@ -25,9 +25,19 @@ TIMESTAMP_FORMATS = [
     "yyyy-MM-dd'T'HH:mm:ss.SSSSSS",
     "yyyy-MM-dd'T'HH:mm:ss",
     "MM/dd/yyyy HH:mm:ss",
+    "M/d/yyyy H:mm:ss",       # unpadded month/day/hour
     "dd/MM/yyyy HH:mm:ss",
+    "d/M/yyyy H:mm:ss",       # unpadded day/month/hour
     "MM-dd-yyyy HH:mm:ss",
     "yyyy/MM/dd HH:mm:ss",
+    # date-only fallbacks (no time component)
+    "yyyy-MM-dd",
+    "MM/dd/yyyy",
+    "M/d/yyyy",               # <-- catches "4/9/2026"
+    "dd/MM/yyyy",
+    "d/M/yyyy",
+    "MM-dd-yyyy",
+    "yyyy/MM/dd",
 ]
 
 FAKE_NULL_TOKENS = {"null", "none", "na", "n/a", "nat", "-", "nil"}
