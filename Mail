@@ -46,3 +46,18 @@ WHERE o.ObjectDatabaseName IN ('CCW_BASE_INT','CCW_VIEW_INT','CCW_EVAL_INT','CCW
   AND o.ObjectTableName IN ('CLM_LN_PHRM_MV','CLM_LN_PHRM_EXT_MV','CLM_LN_PHRM_RJCT_MV','CLM_LN_PHRM_TRNSCTN_REIMB_SV','CLM_LN_PHRM_TRNSCTN_REIMB_INCRMTL_SV','CLM_LN_PHRM_TRNSCTN_REIMB_INCRMTL_EXT_SV','CLM_SAVE_OPPOR_KPI_INCRMTL_SV')
   AND o.logdate BETWEEN DATE - 90 AND DATE - 1
 GROUP BY metric_date, data_object_database_name, data_product_name, data_product_object_name, data_product_object_id
+
+
+
+Hi Vig,
+
+Thank you for sharing the 90 days of data — really appreciate your support on this.
+
+Could you please also share the required table and column details along with the data product usage metrics, as per the SQL queries mentioned in the attached sheet? This will help ensure we align everything accurately for the analysis.
+
+Let me know if you need any clarification from my side.
+
+Thanks again for your help.
+
+Best regards,
+Akash
