@@ -13,3 +13,36 @@ Please let me know if you need any clarification or further details from our sid
 Thanks and regards,
 Akash Mehta
 
+
+SELECT
+  ROW_NUMBER() OVER (ORDER BY metric_date DESC, data_product_object_id) AS row_wid,
+  l.LogDate AS metric_date,
+  'Cigna Health Plan - Pharmacy Claim' AS data_product_name,
+  o.ObjectDatabaseName AS data_object_database_name,
+  o.ObjectTableName AS data_product_object_name,
+  o.ObjectID AS data_product_object_id,
+  SUM(CASE WHEN UPPER(l.UserName) NOT LIKE ANY ('SVT%','ETL%','DBA%','OP%') THEN 1 ELSE 0 END) AS User_query_count,
+  SUM(CASE WHEN UPPER(l.UserName) LIKE ANY ('SVT%','ETL%','DBA%','OP%') THEN 1 ELSE 0 END) AS App_query_count,
+  COUNT(DISTINCT CASE WHEN UPPER(l.UserName) NOT LIKE ANY ('SVT%','ETL%','DBA%','OP%') THEN l.UserName END) AS Unique_User,
+  COUNT(DISTINCT CASE WHEN UPPER(l.UserName) LIKE ANY ('SVT%','ETL%','DBA%','OP%') THEN l.UserName END) AS Unique_App,
+  SUM(
+    EXTRACT(DAY    FROM (l.LastRespTime - l.StartTime) DAY(4) TO SECOND(6)) * 86400 +
+    EXTRACT(HOUR   FROM (l.LastRespTime - l.StartTime) DAY(4) TO SECOND(6)) * 3600 +
+    EXTRACT(MINUTE FROM (l.LastRespTime - l.StartTime) DAY(4) TO SECOND(6)) * 60 +
+    EXTRACT(SECOND FROM (l.LastRespTime - l.StartTime) DAY(4) TO SECOND(6))
+  ) AS total_execution_Time_in_Seconds,
+  AVG(
+    EXTRACT(DAY    FROM (l.LastRespTime - l.StartTime) DAY(4) TO SECOND(6)) * 86400 +
+    EXTRACT(HOUR   FROM (l.LastRespTime - l.StartTime) DAY(4) TO SECOND(6)) * 3600 +
+    EXTRACT(MINUTE FROM (l.LastRespTime - l.StartTime) DAY(4) TO SECOND(6)) * 60 +
+    EXTRACT(SECOND FROM (l.LastRespTime - l.StartTime) DAY(4) TO SECOND(6))
+  ) AS average_Execution_time_in_Seconds,
+  SUM(CASE WHEN l.ErrorCode <> 0 THEN 1 ELSE 0 END) AS failed_query_count,
+  CURRENT_TIMESTAMP AS Created_timestamp
+FROM PDCRINFO.DBQLOGTBL_HST l
+JOIN PDCRINFO.DBQLObjTbl_Hst o
+  ON l.LogDate = o.LogDate AND l.QueryID = o.QueryID
+WHERE o.ObjectDatabaseName IN ('CCW_BASE_INT','CCW_VIEW_INT','CCW_EVAL_INT','CCW_SVC_VIEW_INT','CCW_USR_VIEW_INT','CCW_ALL_VIEW_INT')
+  AND o.ObjectTableName IN ('CLM_LN_PHRM_MV','CLM_LN_PHRM_EXT_MV','CLM_LN_PHRM_RJCT_MV','CLM_LN_PHRM_TRNSCTN_REIMB_SV','CLM_LN_PHRM_TRNSCTN_REIMB_INCRMTL_SV','CLM_LN_PHRM_TRNSCTN_REIMB_INCRMTL_EXT_SV','CLM_SAVE_OPPOR_KPI_INCRMTL_SV')
+  AND o.logdate BETWEEN DATE - 90 AND DATE - 1
+GROUP BY metric_date, data_object_database_name, data_product_name, data_product_object_name, data_product_object_id
