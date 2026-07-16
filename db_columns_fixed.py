@@ -659,3 +659,105 @@ ws.auto_filter.ref = ws.dimensions
 
 wb.save(OUTPUT_XLSX)
 print(f"[INFO] Saved → {OUTPUT_XLSX}")
+
+
+
+from sqlglot.optimizer.scope import build_scope
+def _extract_from_node(node) -> list:
+    """
+    Pull (table, column) pairs out of a parsed sqlglot node/subtree.
+
+    IMPORTANT: this uses sqlglot's scope resolution (build_scope) instead
+    of a flat find_all() cross-product. The old approach collected every
+    exp.Table and every exp.Column anywhere in the subtree and paired ALL
+    of them together — which is correct for single-table queries but
+    silently corrupts multi-table queries (JOINs, subqueries, CTEs) by
+    attaching columns to tables they don't belong to. With ~160k real
+    queries (lots of joins), that cross-contamination was significant
+    enough to distort the usage metrics.
+
+    Scope-based resolution instead:
+      - Walks each SELECT scope independently (outer query, each JOINed
+        table, each subquery, each CTE body are separate scopes), so
+        columns from one scope never get attributed to tables that only
+        appear in a different scope.
+      - For a QUALIFIED column (t.col), resolves alias `t` to its real
+        table name using that scope's own FROM/JOIN sources.
+      - For an UNQUALIFIED column, it's still ambiguous which table (of
+        possibly several) in that scope it belongs to, so it's attributed
+        to every table in THAT scope only — not the whole statement.
+      - A qualifier that doesn't resolve to a real table in this scope
+        (e.g. it refers to a CTE alias rather than a base table) is
+        skipped rather than guessed at.
+    """
+    pairs = []
+
+    try:
+        root = build_scope(node)
+    except Exception:
+        root = None
+
+    if root is None:
+        # Fallback for fragments build_scope can't handle — keep the old
+        # best-effort behaviour rather than dropping the row entirely.
+        tables = [t.name.upper() for t in node.find_all(exp.Table) if t.name]
+        cols   = list(dict.fromkeys(c.name.upper() for c in node.find_all(exp.Column) if c.name))
+        stars  = list(node.find_all(exp.Star))
+        if stars and not cols:
+            for tbl in tables:
+                pairs.append((tbl, "*"))
+        else:
+            for tbl in tables:
+                for col in cols:
+                    pairs.append((tbl, col))
+        return pairs
+
+    for scope in root.traverse():
+        # alias -> real table name, restricted to THIS scope's own
+        # FROM / JOIN sources (CTE/subquery sources are Scope objects,
+        # not exp.Table, and are deliberately excluded here).
+        alias_to_table = {
+            alias.upper(): source.name.upper()
+            for alias, source in scope.sources.items()
+            if isinstance(source, exp.Table) and source.name
+        }
+        if not alias_to_table:
+            continue
+
+        scope_tables = list(dict.fromkeys(alias_to_table.values()))
+
+        # scope.columns = columns belonging to THIS scope only (sqlglot
+        # excludes columns that live inside nested subquery/CTE scopes).
+        scope_columns = [c for c in scope.columns if c.name]
+
+        has_star = any(
+            isinstance(sel, exp.Star) or
+            (isinstance(sel, exp.Column) and isinstance(sel.this, exp.Star))
+            for sel in getattr(scope.expression, "selects", [])
+        )
+
+        if has_star and not scope_columns:
+            for tbl in scope_tables:
+                pairs.append((tbl, "*"))
+            continue
+
+        seen = set()
+        for col in scope_columns:
+            col_name = col.name.upper()
+            tbl_ref  = col.table.upper() if col.table else None
+
+            if tbl_ref:
+                real_tbl = alias_to_table.get(tbl_ref)
+                targets  = [real_tbl] if real_tbl else []
+            else:
+                # unqualified — ambiguous only within this scope's own
+                # tables, never the rest of the statement
+                targets = scope_tables
+
+            for tbl in targets:
+                key = (tbl, col_name)
+                if key not in seen:
+                    seen.add(key)
+                    pairs.append(key)
+
+    return pairs
