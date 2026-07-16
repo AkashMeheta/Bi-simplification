@@ -1,4 +1,120 @@
-# =============================================================================
+DEFAULT_TABLE = "SUBQUERIES_CTES"   # placeholder for columns we can't confidently tie to a real base table
+
+
+def _extract_from_node(node) -> list:
+    """
+    Pull (table, column) pairs out of a parsed sqlglot node/subtree, using
+    scope-based alias resolution instead of a flat find_all() cross-product.
+
+    Anything that can't be confidently tied to one real base table is
+    mapped to DEFAULT_TABLE ("SUBQUERIES_CTES") instead of being force-
+    attributed to a wrong table or silently dropped. Three cases land here:
+
+      1. A QUALIFIED column whose qualifier resolves to a subquery/CTE
+         alias rather than a real exp.Table (e.g. `cte1.col` where cte1 is
+         a WITH-clause CTE, not a base table) -- alias_to_table only ever
+         contains real exp.Table sources, so this naturally falls through.
+      2. An UNQUALIFIED column that's genuinely ambiguous because this
+         scope joins more than one real table (e.g. bare `SVC_BEG_DT`
+         inside EXTRACT(...) when the FROM has 4 joined tables).
+      3. An UNQUALIFIED column whose name matches one of this scope's own
+         SELECT-list output aliases (e.g. WHERE DRUG_TYPE_IND <> '?' where
+         DRUG_TYPE_IND is a `CASE...END AS DRUG_TYPE_IND` in the SELECT) --
+         it's a self-reference to a computed value, not a real table
+         column, so it can never be a real (table, column) pair either.
+
+    Everything that CAN be resolved still resolves exactly as before:
+      - Each SELECT/JOIN/subquery/CTE is its own scope; columns never leak
+        across scopes.
+      - Qualified columns (t.col) resolve via THIS scope's own FROM/JOIN
+        alias map to a real table when one exists.
+      - A single-table scope still attributes bare columns to that table.
+    """
+    pairs = []
+
+    try:
+        root = build_scope(node)
+    except Exception:
+        root = None
+
+    if root is None:
+        tables = [t.name.upper() for t in node.find_all(exp.Table) if t.name]
+        cols   = list(dict.fromkeys(c.name.upper() for c in node.find_all(exp.Column) if c.name))
+        stars  = list(node.find_all(exp.Star))
+        if stars and not cols:
+            for tbl in tables:
+                pairs.append((tbl, "*"))
+        else:
+            for tbl in tables:
+                for col in cols:
+                    pairs.append((tbl, col))
+        return pairs
+
+    for scope in root.traverse():
+        alias_to_table = {
+            alias.upper(): source.name.upper()
+            for alias, source in scope.sources.items()
+            if isinstance(source, exp.Table) and source.name
+        }
+
+        # this scope's own alias set (real tables + subquery/CTE aliases)
+        # -- used only to know whether a qualifier belongs to THIS scope
+        # at all vs. being a completely stray/unrecognized reference.
+        all_scope_aliases = {alias.upper() for alias in scope.sources.keys()}
+
+        scope_tables = list(dict.fromkeys(alias_to_table.values()))
+
+        output_alias_names = {
+            sel.alias.upper() for sel in getattr(scope.expression, "selects", [])
+            if isinstance(sel, exp.Alias)
+        }
+
+        has_star = any(
+            isinstance(sel, exp.Star) or
+            (isinstance(sel, exp.Column) and isinstance(sel.this, exp.Star))
+            for sel in getattr(scope.expression, "selects", [])
+        )
+
+        scope_columns = [c for c in scope.columns if c.name]
+
+        if has_star and not scope_columns:
+            for tbl in scope_tables:
+                pairs.append((tbl, "*"))
+            continue
+
+        seen = set()
+        for col in scope_columns:
+            col_name = col.name.upper()
+            tbl_ref  = col.table.upper() if col.table else None
+
+            if tbl_ref:
+                real_tbl = alias_to_table.get(tbl_ref)
+                if real_tbl:
+                    key = (real_tbl, col_name)
+                else:
+                    # qualifier exists but isn't a real base table in this
+                    # scope -> it's a subquery/CTE alias
+                    key = (DEFAULT_TABLE, col_name)
+                if key not in seen:
+                    seen.add(key)
+                    pairs.append(key)
+                continue
+
+            # unqualified column
+            if col_name in output_alias_names:
+                key = (DEFAULT_TABLE, col_name)
+            elif len(scope_tables) == 1:
+                key = (scope_tables[0], col_name)
+            else:
+                key = (DEFAULT_TABLE, col_name)
+
+            if key not in seen:
+                seen.add(key)
+                pairs.append(key)
+
+    return pairs
+
+=============================================================================
 # Teradata Query Usage Metrics Pipeline — Pure Python (No PySpark)
 # =============================================================================
 # Dependencies:  pip install pandas sqlglot openpyxl
