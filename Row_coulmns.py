@@ -664,67 +664,27 @@ df_final = df_agg[[
 print(f"[INFO] Final aggregated rows      : {len(df_final)}")
 print(df_final.head(10).to_string(index=False))
 
-
 # =============================================================================
-# STEP 6 — Write skip log
+# STEP 6 — Skip log as a DataFrame (no file write)
 # =============================================================================
 
-if skip_log:
-    with open(SKIP_LOG, "w", encoding="utf-8") as f:
-        f.write(f"Skipped queries — {datetime.now()}\n{'='*80}\n\n")
-        for i, entry in enumerate(skip_log, 1):
-            f.write(f"[{i}] date={entry['date']}  user={entry['user']}  row_id={entry['row_id']}\n")
-            f.write(f"     reason : {entry['reason']}\n")
-            f.write(f"     sql    : {entry['sql']}\n\n")
-    print(f"[INFO] Skip log written → {SKIP_LOG}")
+df_skip_log = pd.DataFrame(skip_log, columns=["date", "user", "row_id", "reason", "sql"])
+print(f"[INFO] Skip log rows : {len(df_skip_log)}")
 
 
 # =============================================================================
-# STEP 7 — Write to Excel
+# STEP 7 — Final result as a DataFrame (no Excel file write)
 # =============================================================================
 
-df_final.to_excel(OUTPUT_XLSX, index=False, sheet_name="Usage_Metrics")
+# df_final is already a fully in-memory pandas DataFrame from STEP 5 —
+# nothing further to do to "produce" it. If you need it as a Spark
+# DataFrame for downstream Databricks use (e.g. writing to a Delta
+# table), convert it explicitly here rather than round-tripping through
+# a file:
+#
+#   df_final_spark = spark.createDataFrame(df_final)
+#
+# Left as pandas by default since nothing in this pipeline requires Spark.
 
-wb = load_workbook(OUTPUT_XLSX)
-ws = wb["Usage_Metrics"]
-
-HEADER_FILL  = PatternFill("solid", fgColor="1F4E79")
-HEADER_FONT  = Font(name="Arial", bold=True, color="FFFFFF", size=10)
-DATA_FONT    = Font(name="Arial", size=10)
-ALT_FILL     = PatternFill("solid", fgColor="EBF3FB")
-THIN_BORDER  = Border(
-    left   = Side(style="thin", color="D9D9D9"),
-    right  = Side(style="thin", color="D9D9D9"),
-    top    = Side(style="thin", color="D9D9D9"),
-    bottom = Side(style="thin", color="D9D9D9"),
-)
-NUMERIC_COLS = {1, 5, 6, 7}   # Row_Wid, Usage_Count, Distinct_Users, Distinct_Apps
-
-for cell in ws[1]:
-    cell.font      = HEADER_FONT
-    cell.fill      = HEADER_FILL
-    cell.alignment = Alignment(horizontal="center", vertical="center")
-    cell.border    = THIN_BORDER
-ws.row_dimensions[1].height = 22
-
-for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
-    fill = ALT_FILL if row_idx % 2 == 0 else PatternFill()
-    for cell in row:
-        cell.font      = DATA_FONT
-        cell.fill      = fill
-        cell.border    = THIN_BORDER
-        cell.alignment = Alignment(
-            horizontal = "center" if cell.column in NUMERIC_COLS else "left",
-            vertical   = "center"
-        )
-
-# column 8 = Source_Row_Ids (new, wider since it can hold many ids),
-# column 9 = Created_Timestamp (shifted from 8 -> 9)
-for col_num, width in {1:10, 2:14, 3:42, 4:36, 5:14, 6:16, 7:14, 8:34, 9:22}.items():
-    ws.column_dimensions[get_column_letter(col_num)].width = width
-
-ws.freeze_panes    = "A2"
-ws.auto_filter.ref = ws.dimensions
-
-wb.save(OUTPUT_XLSX)
-print(f"[INFO] Saved → {OUTPUT_XLSX}")
+print(f"[INFO] Final aggregated rows : {len(df_final)}")
+print(df_final.head(10).to_string(index=False))
