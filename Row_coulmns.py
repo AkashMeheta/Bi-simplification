@@ -152,6 +152,47 @@ def _convert_sql_users_format_rows(pdf: pd.DataFrame):
 _fmt = _detect_format(input_df.columns)
 print(f"[INFO] Detected input format: {_fmt}")
 
+
+
+
+_input_pdf = input_df.toPandas().reset_index(drop=True)
+
+# Prefer a Row_ID the caller already put in input_df (case-insensitive
+# match, e.g. "Row_ID" / "row_id" / "RowId") over a freshly-generated
+# positional index -- previously this always overwrote any existing
+# column with 0,1,2..., silently discarding the caller's own ids.
+_existing_row_id_col = next(
+    (c for c in _input_pdf.columns if c.strip().lower() == "row_id"), None
+)
+if _existing_row_id_col is not None:
+    _input_pdf["Row_ID"] = _input_pdf[_existing_row_id_col].astype(str)
+else:
+    _input_pdf["Row_ID"] = _input_pdf.index.astype(str)   # positional fallback,
+                                                            # assigned once, before
+                                                            # any filtering
+
+print(f"[INFO] Row_ID source: "
+      f"{'existing column ' + repr(_existing_row_id_col) if _existing_row_id_col else 'positional index'}")
+print(f"[INFO] Row_ID sample: {_input_pdf['Row_ID'].head(5).tolist()}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 _input_pdf = input_df.toPandas().reset_index(drop=True)
 _input_pdf["Row_ID"] = _input_pdf.index.astype(str)   # positional row id, assigned
                                                         # once, before any filtering
