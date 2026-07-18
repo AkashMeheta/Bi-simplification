@@ -1,3 +1,187 @@
+import re
+import logging
+from datetime import datetime
+
+import pandas as pd
+import sqlglot
+from sqlglot import exp
+
+# Silence sqlglot's benign "falling back to Command" warnings — we handle
+# that fallback ourselves in extract_table_column_pairs() below, so the
+# raw warning text would just be noise (one line per recovered query).
+logging.getLogger("sqlglot").setLevel(logging.ERROR)
+
+# COMMAND ----------
+
+# ── CONFIG ────────────────────────────────────────────────────────────────────
+
+APP_PREFIXES = ("svp", "ovt", "dt")        # case-insensitive prefix → app
+
+# COMMAND ----------
+
+# =============================================================================
+# STEP 0 — Auto-detect input schema & normalize into (SqlTextInfo, Metric_Date,
+#          users, Row_ID) records — in-memory, no temp files.
+# =============================================================================
+# Supports the same two input schemas as the original script:
+#
+# Format A — "new_format":
+#   Columns: user_name, Db_nm, Tbl_nm, SqlTextInfo, LogDate, StartTime,
+#            LastResponseTime
+#   Detection: header contains "user_name" AND "logdate"
+#
+# Format B/C — "sql_users_format":
+#   Columns: SqlTextInfo, Metric_Date, users
+#
+# Dates are normalized to YYYY-MM-DD (required by the STEP 1 validation),
+# handling DD/MM/YYYY, YYYY/MM/DD, and ISO-8601 timestamps like
+# 2026-06-25T14:48:39.466Z.
+#
+# Row_ID: assigned once, right after input_df.toPandas(), as the row's
+# positional index in that pandas DataFrame (stringified). It's carried
+# through both format converters and the STEP 1 validation filter so that
+# every surviving record can still be traced back to its original input
+# row later (e.g. when aggregating table/column usage downstream and
+# wanting to backtrack a given usage row to the SqlTextInfo it came from).
+# =============================================================================
+
+
+def _normalize_date(date_str: str) -> str:
+    """
+    Normalize a date string to YYYY-MM-DD. Handles:
+      • YYYY-MM-DD                          -> unchanged
+      • YYYY-MM-DDTHH:MM:SS(.ffffff)?Z?      -> date part only
+                                                (2026-06-25T14:48:39.466Z -> 2026-06-25)
+      • DD/MM/YYYY                           -> rearranged (29/02/2026 -> 2026-02-29)
+      • YYYY/MM/DD                           -> rearranged
+    Unrecognized shapes are returned unchanged.
+    """
+    date_str = date_str.strip()
+
+    if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+        return date_str
+
+    m = re.match(r'^(\d{4}-\d{2}-\d{2})[T ]\d{2}:\d{2}:\d{2}', date_str)
+    if m:
+        return m.group(1)
+
+    m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{4})$', date_str)
+    if m:
+        dd, mm, yyyy = m.groups()
+        return f"{yyyy}-{mm.zfill(2)}-{dd.zfill(2)}"
+
+    m = re.match(r'^(\d{4})/(\d{1,2})/(\d{1,2})$', date_str)
+    if m:
+        yyyy, mm, dd = m.groups()
+        return f"{yyyy}-{mm.zfill(2)}-{dd.zfill(2)}"
+
+    return date_str
+
+
+def _normalize_sql_field(sql_raw: str) -> str:
+    """Guarantee exactly one trailing ';'.
+
+    (The original also escaped internal double-quotes so the field would
+    round-trip safely through a temp CSV file. That round trip no longer
+    happens here since we stay in-memory, so the escaping step — which
+    existed purely to survive a CSV write/re-read — is not needed.)
+    """
+    sql_norm = sql_raw.strip().rstrip()
+    if not sql_norm.endswith(";"):
+        sql_norm += ";"
+    return sql_norm
+
+
+def _detect_format(columns) -> str:
+    """
+    Only two schemas need distinguishing up front:
+      • "new_format"       — user_name/Db_nm/Tbl_nm/SqlTextInfo/LogDate/... columns
+      • "sql_users_format" — SqlTextInfo,Metric_Date,users columns
+    """
+    cols_lower = {c.strip().lower() for c in columns}
+    if "user_name" in cols_lower and "logdate" in cols_lower:
+        return "new_format"
+    return "sql_users_format"
+
+
+def _convert_new_format_rows(pdf: pd.DataFrame):
+    """Normalize a 'new_format' pandas DataFrame into (sql, date, user, row_id) tuples."""
+    rows_out = []
+    for row in pdf.itertuples(index=False):
+        row_d = row._asdict()
+        sql_raw  = str(row_d.get("SqlTextInfo") or "").strip()
+        log_date = _normalize_date(str(row_d.get("LogDate") or "").strip())
+        user     = str(row_d.get("user_name") or "").strip()
+        row_id   = str(row_d.get("Row_ID") or "").strip()
+
+        if not sql_raw or not log_date or not user:
+            continue
+
+        rows_out.append((_normalize_sql_field(sql_raw), log_date, user, row_id))
+    return rows_out
+
+
+def _convert_sql_users_format_rows(pdf: pd.DataFrame):
+    """Normalize a 'sql_users_format' pandas DataFrame into (sql, date, user, row_id) tuples."""
+    rows_out = []
+    for row in pdf.itertuples(index=False):
+        row_d = row._asdict()
+        sql_raw  = str(row_d.get("SqlTextInfo") or "").strip()
+        log_date = _normalize_date(str(row_d.get("Metric_Date") or "").strip())
+        user     = str(row_d.get("users") or "").strip()
+        row_id   = str(row_d.get("Row_ID") or "").strip()
+
+        if not sql_raw or not log_date or not user:
+            continue
+
+        rows_out.append((_normalize_sql_field(sql_raw), log_date, user, row_id))
+    return rows_out
+
+
+# COMMAND ----------
+
+# =============================================================================
+# STEP 1 — Read from the Spark input DataFrame & validate rows
+# =============================================================================
+# `input_df` is expected to already exist in the notebook (e.g.
+#   input_df = spark.table("catalog.schema.teradata_query_log")
+# ), matching either the "new_format" or "sql_users_format" schema described
+# above.
+# =============================================================================
+
+_fmt = _detect_format(input_df.columns)
+print(f"[INFO] Detected input format: {_fmt}")
+
+_input_pdf = input_df.toPandas().reset_index(drop=True)
+_input_pdf["Row_ID"] = _input_pdf.index.astype(str)   # positional row id, assigned
+                                                        # once, before any filtering
+
+if _fmt == "new_format":
+    _normalized_rows = _convert_new_format_rows(_input_pdf)
+else:
+    _normalized_rows = _convert_sql_users_format_rows(_input_pdf)
+
+print(f"[INFO] Normalized rows: {len(_normalized_rows)}")
+
+raw_records = []
+_skipped_bad_rows = 0
+
+for sql_field, date_field, user_field, row_id_field in _normalized_rows:
+    date_field = date_field.strip()
+
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_field):
+        _skipped_bad_rows += 1
+        continue
+
+    if not sql_field.strip() or not user_field.strip():
+        _skipped_bad_rows += 1
+        continue
+
+    raw_records.append((sql_field, date_field, user_field, row_id_field))
+
+print(f"[INFO] Records found : {len(raw_records)}")
+if _skipped_bad_rows:
+    print(f"[INFO] Rows skipped (malformed) : {_skipped_bad_rows}")
 # =============================================================================
 # STEP 2 — Helpers
 # =============================================================================
