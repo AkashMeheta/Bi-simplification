@@ -566,3 +566,165 @@ def extract_table_column_pairs(raw_sql: str) -> tuple:
         reason = None
 
     return pairs, reason
+
+
+# =============================================================================
+# STEP 3 — Explode every record → flat rows
+# =============================================================================
+
+exploded = []
+skip_log = []
+_total_records = len(raw_records)
+_progress_every = 20_000  # print a heartbeat every N records on large runs
+
+for _i, (raw_sql, date, user, row_id) in enumerate(raw_records, start=1):
+    date   = date.strip()
+    user   = user.strip()
+    row_id = str(row_id)
+    acct   = classify(user)
+
+    pairs, reason = extract_table_column_pairs(raw_sql)
+
+    if reason:
+        skip_log.append({"date": date, "user": user, "row_id": row_id, "reason": reason,
+                         "sql": raw_sql.replace('""', '"').strip()[:300]})
+
+    for tbl, col in pairs:
+        exploded.append({
+            "Log_Date"   : date,
+            "Table_Name" : tbl,
+            "Column_Name": col,
+            "username"   : user,
+            "acct_type"  : acct,
+            "Row_ID"     : row_id,
+        })
+
+    if _i % _progress_every == 0 or _i == _total_records:
+        print(f"[INFO] Parsed {_i:,} / {_total_records:,} records "
+              f"({len(exploded):,} rows exploded so far)")
+
+print(f"[INFO] Exploded rows (before agg) : {len(exploded)}")
+print(f"[INFO] Skipped / unparseable      : {len(skip_log)}")
+
+if not exploded:
+    raise SystemExit("[ERROR] No rows after parsing — check INPUT_CSV path and format.")
+
+df_exp = pd.DataFrame(exploded)
+
+
+# =============================================================================
+# STEP 4 — Aggregate by (Log_Date, Table_Name, Column_Name)
+# =============================================================================
+
+GRP_KEYS = ["Log_Date", "Table_Name", "Column_Name"]
+
+df_users = (df_exp[df_exp["acct_type"] == "user"]
+            .groupby(GRP_KEYS)["username"]
+            .nunique()
+            .rename("Distinct_Users"))
+
+df_apps  = (df_exp[df_exp["acct_type"] == "app"]
+            .groupby(GRP_KEYS)["username"]
+            .nunique()
+            .rename("Distinct_Apps"))
+
+df_count = (df_exp.groupby(GRP_KEYS)["username"]
+            .count()
+            .rename("Usage_Count"))
+
+# Backtrack support: every original SqlTextInfo row that contributed a
+# (Table_Name, Column_Name) pair to this group, deduped (a single query
+# can surface the same pair more than once, e.g. via a self-join) and
+# sorted for stable, diffable output, joined into one string.
+df_row_ids = (df_exp.groupby(GRP_KEYS)["Row_ID"]
+              .apply(lambda ids: ",".join(sorted(set(ids), key=lambda x: (len(x), x))))
+              .rename("Source_Row_Ids"))
+
+df_agg = (pd.concat([df_count, df_users, df_apps, df_row_ids], axis=1)
+            .fillna({"Usage_Count": 0, "Distinct_Users": 0, "Distinct_Apps": 0, "Source_Row_Ids": ""})
+            .astype({"Distinct_Users": int, "Distinct_Apps": int})
+            .reset_index()
+            .sort_values(GRP_KEYS)
+            .reset_index(drop=True))
+
+
+# =============================================================================
+# STEP 5 — Add Row_Wid and Created_Timestamp
+# =============================================================================
+
+df_agg.insert(0, "Row_Wid", range(1, len(df_agg) + 1))
+df_agg["Created_Timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+df_final = df_agg[[
+    "Row_Wid", "Log_Date", "Table_Name", "Column_Name",
+    "Usage_Count", "Distinct_Users", "Distinct_Apps",
+    "Source_Row_Ids", "Created_Timestamp",
+]]
+
+print(f"[INFO] Final aggregated rows      : {len(df_final)}")
+print(df_final.head(10).to_string(index=False))
+
+
+# =============================================================================
+# STEP 6 — Write skip log
+# =============================================================================
+
+if skip_log:
+    with open(SKIP_LOG, "w", encoding="utf-8") as f:
+        f.write(f"Skipped queries — {datetime.now()}\n{'='*80}\n\n")
+        for i, entry in enumerate(skip_log, 1):
+            f.write(f"[{i}] date={entry['date']}  user={entry['user']}  row_id={entry['row_id']}\n")
+            f.write(f"     reason : {entry['reason']}\n")
+            f.write(f"     sql    : {entry['sql']}\n\n")
+    print(f"[INFO] Skip log written → {SKIP_LOG}")
+
+
+# =============================================================================
+# STEP 7 — Write to Excel
+# =============================================================================
+
+df_final.to_excel(OUTPUT_XLSX, index=False, sheet_name="Usage_Metrics")
+
+wb = load_workbook(OUTPUT_XLSX)
+ws = wb["Usage_Metrics"]
+
+HEADER_FILL  = PatternFill("solid", fgColor="1F4E79")
+HEADER_FONT  = Font(name="Arial", bold=True, color="FFFFFF", size=10)
+DATA_FONT    = Font(name="Arial", size=10)
+ALT_FILL     = PatternFill("solid", fgColor="EBF3FB")
+THIN_BORDER  = Border(
+    left   = Side(style="thin", color="D9D9D9"),
+    right  = Side(style="thin", color="D9D9D9"),
+    top    = Side(style="thin", color="D9D9D9"),
+    bottom = Side(style="thin", color="D9D9D9"),
+)
+NUMERIC_COLS = {1, 5, 6, 7}   # Row_Wid, Usage_Count, Distinct_Users, Distinct_Apps
+
+for cell in ws[1]:
+    cell.font      = HEADER_FONT
+    cell.fill      = HEADER_FILL
+    cell.alignment = Alignment(horizontal="center", vertical="center")
+    cell.border    = THIN_BORDER
+ws.row_dimensions[1].height = 22
+
+for row_idx, row in enumerate(ws.iter_rows(min_row=2), start=2):
+    fill = ALT_FILL if row_idx % 2 == 0 else PatternFill()
+    for cell in row:
+        cell.font      = DATA_FONT
+        cell.fill      = fill
+        cell.border    = THIN_BORDER
+        cell.alignment = Alignment(
+            horizontal = "center" if cell.column in NUMERIC_COLS else "left",
+            vertical   = "center"
+        )
+
+# column 8 = Source_Row_Ids (new, wider since it can hold many ids),
+# column 9 = Created_Timestamp (shifted from 8 -> 9)
+for col_num, width in {1:10, 2:14, 3:42, 4:36, 5:14, 6:16, 7:14, 8:34, 9:22}.items():
+    ws.column_dimensions[get_column_letter(col_num)].width = width
+
+ws.freeze_panes    = "A2"
+ws.auto_filter.ref = ws.dimensions
+
+wb.save(OUTPUT_XLSX)
+print(f"[INFO] Saved → {OUTPUT_XLSX}")
