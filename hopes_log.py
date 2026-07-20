@@ -1,44 +1,31 @@
-from pyspark.sql.window import Window
+from pyspark.sql.functions import col, coalesce
 
-from pyspark.sql.functions import row_number, col
-
-
-
-window_spec = Window.orderBy("row_wid")  # or any column to define order
-
-
-
-df = df.withColumn(
-
-    "row_wid",
-
-    row_number().over(window_spec)
-
+# Step 1: Join
+df2_updated = (
+    ddf.alias("t2")
+    .join(
+        mdf.alias("t1"),
+        (col("t2.data_object_database_name") == col("t1.DatabaseName")) &
+        (col("t2.Data_Product_Object_Name") == col("t1.TableName")),
+        "left"
+    )
+    .withColumn(
+        "column_count_updated",
+        coalesce(col("t1.column_count"), col("t2.column_count"))
+    )
 )
 
+# Step 2: Insert at index 7
+insert_index = 7
 
+# IMPORTANT: use original df columns
+cols = [c for c in ddf.columns if c != "column_count"]
 
-
-
-from pyspark.sql.functions import when, concat, lit
-
-
-
-df = df.withColumn(
-
-    "recommendation_id",
-
-    when(
-
-        col("source") == "databricks",
-
-        concat(lit("DB"), col("recommendation_id"))
-
-    ).otherwise(col("recommendation_id"))
-
+res_df = df2_updated.select(
+    *cols[:insert_index],
+    col("column_count_updated").alias("column_count"),
+    *cols[insert_index:]
 )
 
-
-
-
-
+# Step 3: Display correct DF
+res_df.display()
