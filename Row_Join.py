@@ -524,4 +524,75 @@ df_row_ids = (df_exp.groupby(GRP_KEYS)["Row_ID"]
               .apply(lambda ids: ",".join(sorted(set(ids), key=lambda x: (len(x), x))))
               .rename("Source_Row_Ids"))
 
-df_agg = (pd.concat([df_count, df_users, df_apps, df_r
+
+df_agg = (pd.concat([df_count, df_users, df_apps, df_right_cols, df_row_ids], axis=1)
+            .fillna({"Distinct_Users": 0, "Distinct_Apps": 0,
+                      "Right_Table_Columns": "", "Source_Row_Ids": ""})
+            .astype({"Distinct_Users": int, "Distinct_Apps": int})
+            .reset_index()
+            .sort_values(GRP_KEYS)
+            .reset_index(drop=True))
+
+# COMMAND ----------
+
+# =============================================================================
+# STEP 5 — Rename columns to final schema & add Row_Wid / Created_Timestamp
+# =============================================================================
+
+df_agg.insert(0, "Row_Wid", range(1, len(df_agg) + 1))
+df_agg["Created_Timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+df_final = df_agg.rename(columns={
+    "left_db"  : "Left_Table_Database",
+    "left_tbl" : "Left_Table_Name",
+    "right_db" : "Right_Table_Database",
+    "right_tbl": "Right_Table_Name",
+    "join_type": "Join_Type",
+    "join_keys": "Join_Keys",
+})[[
+    "Row_Wid",
+    "Log_Date",
+    "Left_Table_Database",
+    "Left_Table_Name",
+    "Right_Table_Database",
+    "Right_Table_Name",
+    "Right_Table_Columns",
+    "Join_Type",
+    "Join_Keys",
+    "Join_Count",
+    "Distinct_Users",
+    "Distinct_Apps",
+    "Source_Row_Ids",
+    "Created_Timestamp",
+]]
+
+print(f"[INFO] Final aggregated rows : {len(df_final)}")
+print(df_final.head(10).to_string(index=False))
+
+# COMMAND ----------
+
+# =============================================================================
+# STEP 6 — Skip log (kept in memory only — no file is written)
+# =============================================================================
+
+if skip_log:
+    print(f"[INFO] {len(skip_log)} queries were skipped/unparseable. "
+          f"First few reasons:")
+    for entry in skip_log[:5]:
+        print(f"  date={entry['date']}  user={entry['user']}  row_id={entry['row_id']}  reason={entry['reason']}")
+
+# Optional: expose the skip log as a Spark DataFrame too, purely in-memory
+# (comment out if not needed).
+skip_log_df = spark.createDataFrame(pd.DataFrame(skip_log)) if skip_log else None
+
+# COMMAND ----------
+
+# =============================================================================
+# STEP 7 — Convert final pandas DataFrame to a Spark DataFrame (output)
+# =============================================================================
+# Replaces the original openpyxl Excel-writing step. No files are written —
+# `join_metrics_df` is the pipeline's output Spark DataFrame.
+# =============================================================================
+
+join_metrics_df = spark.createDataFrame(df_final)
+print(f"[INFO] join_metrics_df rows : {join_metrics_df.count()}")
