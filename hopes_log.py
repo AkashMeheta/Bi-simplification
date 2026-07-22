@@ -29,3 +29,24 @@ res_df = df2_updated.select(
 
 # Step 3: Display correct DF
 res_df.display()
+
+
+
+
+from delta.tables import DeltaTable
+
+# Enable schema evolution (important for new columns)
+spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
+
+target = DeltaTable.forName(
+    spark,
+    "usm_dev.ccw_audmstr_rawz.data_product_column_metadata"
+)
+
+target.alias("t").merge(
+    res_df.alias("s"),
+    "t.TableName = s.TableName AND t.ColumnName = s.ColumnName"
+).whenMatchedUpdate(set={
+    "is_used_teradata": "s.is_used_teradata",
+    "is_used_databricks": "s.is_used_databricks"
+}).whenNotMatchedInsertAll().execute()
