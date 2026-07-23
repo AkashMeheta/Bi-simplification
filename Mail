@@ -12,3 +12,24 @@ Thanks in advance for your support.
 
 Best regards,
 Akash
+
+
+
+
+from pyspark.sql.functions import col, unix_timestamp, to_date, lit
+
+df = (
+    df
+    .withColumn("user_name", col("user_name"))
+    .withColumn("Database_Name", col("Db_nm"))
+    .withColumn("Table_Name", col("Tbl_nm"))
+    .withColumn("SqlTextInfo", col("SqlTextInfo"))
+    .withColumn("LogDate", to_date(col("LogDate")))
+    .withColumn("StartTime", col("StartTime").cast("timestamp"))
+    .withColumn("LastResponseTime", col("LastResponseTime").cast("timestamp"))
+    .withColumn(
+        "Execution_Time",
+        (unix_timestamp("LastResponseTime") - unix_timestamp("StartTime")).cast("double")
+    )
+    .withColumn("source", lit(source))
+)
