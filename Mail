@@ -1,12 +1,35 @@
-Hi Vigneswaran,
+from pyspark.sql import functions as F
 
-I hope you are doing well.
+table_list = [
+    'CLM_LN_PHRM_MV', 'CLM_LN_PHRM_EXT_MV', 'CLM_LN_PHRM_RJCT_MV',
+    'CLM_LN_PHRM_TRNSCTN_REIMB_SV', 'CLM_LN_PHRM_TRNSCTN_REIMB_EXT_SV',
+    'CLM_LN_PHRM_TRNSCTN_REIMB_INCRMTL_SV',
+    'CLM_LN_PHRM_TRNSCTN_REIMB_INCRMTL_EXT_SV',
+    'CLM_SAVE_OPPOR_KPI_INCRMTL_SV'
+]
 
-I wanted to request your support in sharing the data for the most recent 90 days, as it is required for our ongoing analysis. It would be really helpful if you could provide the relevant datasets at your convenience.
+# base table
+table1 = spark.table("usm_dev.ccw_dpoptmz_rawz.data_product_column_metadata")
 
-Please let me know if you need any additional details or clarification from my side.
+# usage metrics table, filtered (this replaces the inner subquery)
+usage_metrics = (
+    spark.table("usm_dev.ccw_dpoptmz_cnfz.column_usage_metrics")
+    .filter(
+        F.col("Table_Name").isin(table_list) &
+        (F.col("source") == "Teradata")
+    )
+    .select(
+        F.col("Table_Name").alias("TableName"),
+        F.col("Column_Name").alias("ColumnName")
+    )
+    .distinct()
+)
 
-Thank you for your time and support.
-
-Best regards,
-Akash Meheta
+# table2 equivalent: table1 rows whose (TableName, ColumnName) exist in usage_metrics
+# a left_semi join is the DataFrame equivalent of "WHERE (col1,col2) IN (subquery)"
+table2 = (
+    table1
+    .join(usage_metrics, on=["TableName", "ColumnName"], how="left_semi")
+    .select("TableName", "ColumnName")
+    .distinct()
+)
