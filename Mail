@@ -45,3 +45,23 @@ unused_column_count_df = (
     )
     .select("total_used_column", "total_columns", "total_unused_column", "source")
 )
+from delta.tables import DeltaTable
+
+# Your source table (the health summary table you want to update)
+target_table_name = "usm_dev.ccw_audmstr_cnfz.data_product_health_summary"
+
+delta_target = DeltaTable.forName(spark, target_table_name)
+
+(
+    delta_target.alias("t")
+    .merge(
+        unused_column_count_df.alias("s"),
+        "t.source = s.source"
+    )
+    .whenMatchedUpdate(set={
+        "total_used_column": "s.total_used_column",
+        "total_columns": "s.total_columns",
+        "total_unused_column": "s.total_unused_column"
+    })
+    .execute()
+)
