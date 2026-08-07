@@ -1,4 +1,23 @@
+
+import re
+import json
+import pandas as pd
+
+
+# ---------------------------------------------------------------------------
+# Core extraction function
+# ---------------------------------------------------------------------------
 def extract_tables(llm_response):
+    """
+    Parses an LLM response string that contains a fenced ```json ... ``` block
+    with two top-level keys: DATA_PRODUCT_RECOMMENDATION and
+    DATA_PRODUCT_HEALTH_SUMMARY.
+
+    Returns a tuple (t1, t2) where each element can be:
+      - a list of dicts   (multiple rows)
+      - a dict             (single row)
+      - []                 (key missing / empty)
+    """
     match = re.search(r"```(.*?)```", llm_response, re.DOTALL)
     if not match:
         raise ValueError("No code block found")
@@ -21,3 +40,111 @@ def extract_tables(llm_response):
         raise ValueError("Neither table found in response")
 
     return t1 or [], t2 or []
+
+
+# ---------------------------------------------------------------------------
+# Helper: safely convert either a dict (single row) or list[dict] (many rows)
+# into a DataFrame. Uses json_normalize so nested keys get flattened into
+# separate columns instead of being dumped into a single cell.
+# ---------------------------------------------------------------------------
+def to_df(x):
+    if not x:
+        return pd.DataFrame()
+    if isinstance(x, dict):
+        x = [x]
+    return pd.json_normalize(x)
+
+
+# ---------------------------------------------------------------------------
+# Calling code (this is what replaces your notebook cell)
+# ---------------------------------------------------------------------------
+def run(response):
+    llm_response = response.json()['choices'][0]['message']['content']
+
+    print(llm_response[:5000])
+    print("HEALTH_SUMMARY" in llm_response)
+
+    table1_data, table2_data = extract_tables(llm_response)
+    print("table1_data type:", type(table1_data))
+    print("table2_data type:", type(table2_data))
+    print(table2_data)
+
+    pd_df1 = to_df(table1_data)
+    pd_df2 = to_df(table2_data)
+
+    # If running in Databricks, uncomment these:
+    # df1_temp = spark.createDataFrame(pd_df1)
+    # df1 = df1_temp.select(pd_df1.columns.tolist())
+    # df2_temp = spark.createDataFrame(pd_df2)
+    # df2 = df2_temp.select(pd_df2.columns.tolist())
+    # df1_temp.show()
+    # df2_temp.show()
+
+    return pd_df1, pd_df2
+
+
+# ---------------------------------------------------------------------------
+# Standalone test — mimics what response.json() looks like, with
+# DATA_PRODUCT_HEALTH_SUMMARY as a single dict (the case that broke earlier)
+# and DATA_PRODUCT_RECOMMENDATION as a list of dicts.
+# ---------------------------------------------------------------------------
+def _build_mock_response():
+    content = """```json
+{
+    "DATA_PRODUCT_RECOMMENDATION": [
+        {
+            "row_id": 1,
+            "recommendation_id": "REC-000001",
+            "data_product_name": "Cigna Health Plan - Pharmacy Claim",
+            "recommendation_type": "PERFORMANCE_IMPROVEMENT",
+            "estimated_impact_score": 92,
+            "confidence_score": 0.91
+        },
+        {
+            "row_id": 2,
+            "recommendation_id": "REC-000002",
+            "data_product_name": "Cigna Health Plan - Pharmacy Claim",
+            "recommendation_type": "HIGH_USAGE_ALERT",
+            "estimated_impact_score": 85,
+            "confidence_score": 0.88
+        }
+    ],
+    "DATA_PRODUCT_HEALTH_SUMMARY": {
+        "data_product_name": "Cigna Health Plan - Pharmacy Claim",
+        "data_product_id": "0x86010b57",
+        "overall_health_score": 78,
+        "status": "NEEDS_ATTENTION",
+        "generated_by": "Enterprise AI Recommendation Engine"
+    }
+}
+```"""
+
+    class MockResponse:
+        def json(self_inner):
+            return {
+                "id": "chatcmpl-test",
+                "choices": [
+                    {"message": {"content": content}}
+                ]
+            }
+
+    return MockResponse()
+
+
+def _test():
+    mock_response = _build_mock_response()
+    pd_df1, pd_df2 = run(mock_response)
+
+    print("\n--- pd_df1 (recommendations, list-of-dicts case) ---")
+    print(pd_df1)
+    assert len(pd_df1) == 2, "Expected 2 recommendation rows"
+
+    print("\n--- pd_df2 (health summary, single-dict case) ---")
+    print(pd_df2)
+    assert len(pd_df2) == 1, "Expected 1 health summary row (dict wrapped into list)"
+
+    print("\nAll assertions passed.")
+
+
+if __name__ == "__main__":
+    _test()
