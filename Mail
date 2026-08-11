@@ -1,26 +1,48 @@
 import boto3
 from botocore.exceptions import ClientError
 
+DEPLOYER_ROLE_ARN = "arn:aws:iam::<ACCOUNT_ID>:role/DEPLOYER-<YOUR-TEAM-NAME-IN-CAPS>"
+
+
 def get_secret():
-    secret_name = "team/ccwdpoptmz/lim_api_key"
+    secret_name = "team/ccwdpoptmz/llm_api_key"
     region_name = "us-east-1"
 
-    # Create a Secrets Manager client
-    session = boto3.session.Session()
-    client = session.client(
-        service_name="secretsmanager",
-        region_name=region_name
+    # Assume the deployer role to get temporary credentials
+    sts_client = boto3.client("sts", region_name=region_name)
+    assumed = sts_client.assume_role(
+        RoleArn=DEPLOYER_ROLE_ARN,
+        RoleSessionName="get-secret-session"
+    )
+    creds = assumed["Credentials"]
+
+    # Create a Secrets Manager client using the assumed role's credentials
+    client = boto3.client(
+        "secretsmanager",
+        region_name=region_name,
+        aws_access_key_id=creds["AccessKeyId"],
+        aws_secret_access_key=creds["SecretAccessKey"],
+        aws_session_token=creds["SessionToken"],
     )
 
+    identity = sts_client.get_caller_identity()
+    print(identity)
+
     try:
-        get_secret_value_response = client.get_secret_value(
+        response = client.get_secret_value(
             SecretId=secret_name
         )
     except ClientError as e:
-        # Re-raise the exception so the caller can handle it
+        # For a list of exceptions, see:
+        # https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
         raise e
 
-    secret = get_secret_value_response["SecretString"]
+    # Extract the secret value
+    secret = response["SecretString"]
 
-    # Your code goes here
     return secret
+
+
+if __name__ == "__main__":
+    secret = get_secret()
+    print(secret)
