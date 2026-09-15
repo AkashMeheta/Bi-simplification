@@ -1,87 +1,215 @@
-relationship:
-  id: owns
-  name: Owns
-  description: Indicates ownership
+entity:
+  id: coverage
+  name: Coverage
 
-  source:
-    entity: organization
-
-  target:
-    entity: product
-
-  cardinality:
-    source: one
-    target: many
+  identifiers:
+    - coverage_id
 
   properties:
-    ownership_start_date:
-      type: date
+    coverage_id:
+      type: string
+      required: true
+      unique: true
 
-    ownership_end_date:
-      type: date
-
-  inverse:
-    name: owned-by
-
-
-relationship:
-  id: belongs-to
-  name: Belongs To
-
-  source:
-    entity: person
-
-  target:
-    entity: organization
-
-  cardinality:
-    source: many
-    target: one
-
-  inverse:
-    name: has-member
-
-
-relationship:
-  id: located-at
-  name: Located At
-
-  source:
-    entity: organization
-
-  target:
-    entity: location
-
-  cardinality:
-    source: many
-    target: one
-
-  inverse:
-    name: location-of
-
-
-
-relationship:
-  id: related-to
-  name: Related To
-
-  source:
-    entity: "*"
-
-  target:
-    entity: "*"
-
-  cardinality:
-    source: many
-    target: many
-
-  properties:
-    relationship_type:
+    coverage_type:
       type: string
 
-    confidence:
+    coverage_limit:
       type: decimal
-      minimum: 0
-      maximum: 1
+
+    deductible:
+      type: decimal
+
+    copay:
+      type: decimal
+
+    coinsurance:
+      type: decimal
+
+    effective_date:
+      type: date
+
+    expiration_date:
+      type: date
+
+
+entity:
+  id: member
+  name: Member
+  extends:
+    - person
+
+  description: A person enrolled in a healthcare insurance plan
+
+  identifiers:
+    - member_id
+
+  properties:
+    member_id:
+      type: string
+      required: true
+      unique: true
+
+    member_status:
+      type: string
+      required: true
+      allowed_values:
+        - active
+        - inactive
+        - terminated
+
+    enrollment_date:
+      type: date
+
+    termination_date:
+      type: date
+
+    member_type:
+      type: string
+      allowed_values:
+        - primary
+        - dependent
+
+  relationships:
+    - member-policy
+    - located-at
+
+  governance:
+    classification: restricted
+    pii: true
+    phi: true
+
+
+entity:
+  id: policy
+  name: Policy
+  extends:
+    - product
+
+  identifiers:
+    - policy_id
+
+  properties:
+    policy_id:
+      type: string
+      required: true
+      unique: true
+
+    policy_number:
+      type: string
+      required: true
+
+    policy_type:
+      type: string
+
+    effective_date:
+      type: date
+      required: true
+
+    expiration_date:
+      type: date
+
+    premium:
+      type: decimal
+
+    status:
+      type: string
+      allowed_values:
+        - active
+        - expired
+        - cancelled
+
+  relationships:
+    - member-policy
+    - policy-claim
+    - owns
+
+
+entity:
+  id: claim
+  name: Claim
+  extends:
+    - event
+
+  identifiers:
+    - claim_id
+
+  properties:
+    claim_id:
+      type: string
+      required: true
+      unique: true
+
+    claim_number:
+      type: string
+      required: true
+
+    claim_date:
+      type: date
+      required: true
+
+    claim_amount:
+      type: decimal
+
+    approved_amount:
+      type: decimal
+
+    claim_status:
+      type: string
+      allowed_values:
+        - submitted
+        - processing
+        - approved
+        - rejected
+        - paid
+
+    diagnosis_code:
+      type: string
+
+    procedure_code:
+      type: string
+
+  relationships:
+    - policy-claim
+    - provider-claim
+
+
+entity:
+  id: provider
+  name: Provider
+  extends:
+    - organization
+
+  identifiers:
+    - provider_id
+
+  properties:
+    provider_id:
+      type: string
+      required: true
+      unique: true
+
+    provider_name:
+      type: string
+      required: true
+
+    provider_type:
+      type: string
+      allowed_values:
+        - hospital
+        - physician
+        - pharmacy
+        - clinic
+        - laboratory
+
+    license_number:
+      type: string
+
+    specialty:
+      type: string
+
+  relationships:
+    - provider-claim
+    - located-at
 
 
