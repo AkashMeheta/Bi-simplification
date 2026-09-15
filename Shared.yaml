@@ -1,81 +1,114 @@
-relationship:
-  id: member-policy
-  name: Member Has Policy
+ontology:
+  id: healthcare-insurance
+  name: Healthcare Insurance Ontology
+  namespace: healthcare.insurance
+  version: "1.0.0"
 
-  source:
-    entity: member
+  description: >
+    Ontology representing healthcare insurance members,
+    policies, claims, providers and coverage.
 
-  target:
-    entity: policy
+  imports:
+    - core
+    - common-relationships
 
-  cardinality:
-    source: many
-    target: many
+  entities:
+    - member
+    - policy
+    - claim
+    - provider
+    - coverage
 
-  properties:
-    enrollment_date:
-      type: date
+  relationships:
+    - member-policy
+    - policy-claim
+    - provider-claim
 
-    termination_date:
-      type: date
+  rules:
+    - claim-policy-validation
+    - coverage-validation
 
-    relationship_type:
-      type: string
-      allowed_values:
-        - primary
-        - dependent
+  mappings:
+    - member-source-mapping
+    - policy-source-mapping
+    - claim-source-mapping
 
-  inverse:
-    name: policy-has-member
+  governance:
+    owner: healthcare-team
+    steward: healthcare-data-steward
+    classification: confidential
 
-
-
-relationship:
-  id: policy-claim
-  name: Policy Has Claim
-
-  source:
-    entity: policy
-
-  target:
-    entity: claim
-
-  cardinality:
-    source: one
-    target: many
-
-  properties:
-    submission_date:
-      type: date
-
-    processing_date:
-      type: date
-
-  inverse:
-    name: claim-belongs-to-policy
+  lifecycle:
+    status: active
+    created_at: "2026-01-01"
+    updated_at: "2026-09-01"
 
 
 
-relationship:
-  id: provider-claim
-  name: Provider Submitted Claim
+metadata:
+  ontology_id: healthcare-insurance
 
-  source:
-    entity: provider
+  ownership:
+    business_owner: healthcare-team
+    technical_owner: ontology-team
+    data_steward: healthcare-data-steward
 
-  target:
-    entity: claim
+  lifecycle:
+    status: active
+    version: "1.0.0"
 
-  cardinality:
-    source: one
-    target: many
+  governance:
+    classification: confidential
+    pii: true
+    phi: true
 
-  properties:
-    service_date:
-      type: date
+  standards:
+    modeling_language: OWL
+    serialization: YAML
+    graph_model: property-graph
 
-    billed_amount:
-      type: decimal
+  documentation:
+    description: Healthcare insurance domain model
 
-  inverse:
-    name: claim-submitted-by-provider
+
+
+
+rule:
+  id: claim-policy-validation
+  name: Claim Policy Validation
+
+  description: >
+    A claim must be associated with an active policy
+    during the claim service date.
+
+  type: validation
+
+  condition:
+    all:
+      - claim.policy exists
+      - claim.claim_date >= policy.effective_date
+      - claim.claim_date <= policy.expiration_date
+
+  severity: error
+
+  action:
+    invalid_record: reject
+
+
+rule:
+  id: coverage-validation
+  name: Coverage Validation
+
+  type: validation
+
+  condition:
+    all:
+      - coverage.effective_date <= coverage.expiration_date
+      - coverage.coverage_limit >= 0
+      - coverage.deductible >= 0
+
+  severity: warning
+
+
+
+
