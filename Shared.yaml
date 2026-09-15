@@ -1,0 +1,175 @@
+entity:
+  id: person
+  name: Person
+  namespace: core
+  description: A human individual
+
+  identifiers:
+    - person_id
+
+  properties:
+    person_id:
+      type: string
+      required: true
+      unique: true
+
+    first_name:
+      type: string
+      required: true
+
+    last_name:
+      type: string
+      required: true
+
+    date_of_birth:
+      type: date
+      required: false
+
+    email:
+      type: string
+      required: false
+
+    phone:
+      type: string
+      required: false
+
+  relationships:
+    - related-to
+    - located-at
+
+  governance:
+    classification: confidential
+    pii: true
+
+
+entity:
+  id: organization
+  name: Organization
+  namespace: core
+  description: A business or legal organization
+
+  identifiers:
+    - organization_id
+
+  properties:
+    organization_id:
+      type: string
+      required: true
+      unique: true
+
+    name:
+      type: string
+      required: true
+
+    organization_type:
+      type: string
+      required: false
+
+    registration_number:
+      type: string
+      required: false
+
+  relationships:
+    - located-at
+    - owns
+    - related-to
+
+
+entity:
+  id: location
+  name: Location
+  namespace: core
+  description: A physical or geographic location
+
+  identifiers:
+    - location_id
+
+  properties:
+    location_id:
+      type: string
+      required: true
+      unique: true
+
+    address_line_1:
+      type: string
+
+    city:
+      type: string
+
+    state:
+      type: string
+
+    country:
+      type: string
+
+    postal_code:
+      type: string
+
+    latitude:
+      type: decimal
+
+    longitude:
+      type: decimal
+
+
+entity:
+  id: product
+  name: Product
+  namespace: core
+  description: A product or service
+
+  identifiers:
+    - product_id
+
+  properties:
+    product_id:
+      type: string
+      required: true
+      unique: true
+
+    name:
+      type: string
+      required: true
+
+    description:
+      type: string
+
+    category:
+      type: string
+
+    status:
+      type: string
+      allowed_values:
+        - active
+        - inactive
+        - discontinued
+
+
+entity:
+  id: event
+  name: Event
+  namespace: core
+  description: A business event
+
+  identifiers:
+    - event_id
+
+  properties:
+    event_id:
+      type: string
+      required: true
+      unique: true
+
+    event_type:
+      type: string
+      required: true
+
+    event_timestamp:
+      type: datetime
+      required: true
+
+    source:
+      type: string
+
+    description:
+      type: string
