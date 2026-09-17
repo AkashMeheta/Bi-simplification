@@ -1,8 +1,8 @@
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
-import os
 
 
 # =====================================================
@@ -13,19 +13,16 @@ API_KEY = "YOUR_API_KEY"
 BASE_URL = "https://your-api-url/v1"
 MODEL_NAME = "your-model-name"
 
-# Embedding model supported by your API
-EMBEDDING_MODEL = "your-embedding-model"
+
+# =====================================================
+# FAISS CONFIGURATION
+# =====================================================
+
+FAISS_PATH = "./faiss_policy_db"
 
 
 # =====================================================
-# VECTOR DB CONFIGURATION
-# =====================================================
-
-VECTOR_DB_PATH = "./faiss_policy_db"
-
-
-# =====================================================
-# LOAD INSURANCE POLICY
+# LOAD INSURANCE POLICY AUTOMATICALLY
 # =====================================================
 
 with open("policy.txt", "r", encoding="utf-8") as file:
@@ -68,42 +65,39 @@ for i, chunk in enumerate(chunks):
 
 
 # =====================================================
-# EMBEDDINGS
+# SENTENCE TRANSFORMER EMBEDDINGS
 # =====================================================
 
-embeddings = OpenAIEmbeddings(
-    model=EMBEDDING_MODEL,
-    api_key=API_KEY,
-    base_url=BASE_URL
+print("\nLoading Sentence Transformer model...")
+
+embeddings = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2",
+    model_kwargs={
+        "device": "cpu"
+    },
+    encode_kwargs={
+        "normalize_embeddings": True
+    }
 )
 
+print("Embedding model loaded.")
+
 
 # =====================================================
-# CREATE / LOAD FAISS VECTOR DATABASE
+# CREATE FAISS VECTOR DATABASE
 # =====================================================
 
-if os.path.exists(VECTOR_DB_PATH):
+print("\nCreating FAISS vector database...")
 
-    print("\nLoading existing FAISS vector database...")
+vector_db = FAISS.from_documents(
+    documents,
+    embeddings
+)
 
-    vector_db = FAISS.load_local(
-        VECTOR_DB_PATH,
-        embeddings,
-        allow_dangerous_deserialization=True
-    )
+# Save FAISS locally
+vector_db.save_local(FAISS_PATH)
 
-else:
-
-    print("\nCreating FAISS vector database...")
-
-    vector_db = FAISS.from_documents(
-        documents,
-        embeddings
-    )
-
-    vector_db.save_local(VECTOR_DB_PATH)
-
-    print("FAISS vector database created successfully.")
+print("FAISS vector database created successfully.")
 
 
 # =====================================================
@@ -132,7 +126,7 @@ patient_type = input("Patient Type (New/Existing): ")
 
 
 # =====================================================
-# RAG SEARCH QUERY
+# CREATE RAG QUERY
 # =====================================================
 
 search_query = f"""
@@ -145,12 +139,13 @@ Diagnosis / Reason:
 Patient Type:
 {patient_type}
 
-Find policy information related to:
+Find insurance policy information related to:
+
 - Coverage
 - Non-covered services
 - Exclusions
 - Waiting periods
-- Prior authorization
+- Prior authorization requirements
 - Eligibility
 - Treatment requirements
 """
@@ -160,17 +155,18 @@ Find policy information related to:
 # RETRIEVE RELEVANT POLICY CHUNKS
 # =====================================================
 
+print("\nSearching policy using RAG...")
+
 retrieved_docs = vector_db.similarity_search(
     search_query,
     k=5
 )
 
-print("\nRelevant policy sections retrieved:")
-print(f"Number of sections: {len(retrieved_docs)}")
+print(f"Retrieved {len(retrieved_docs)} relevant policy sections.")
 
 
 # =====================================================
-# BUILD RAG CONTEXT
+# BUILD POLICY CONTEXT
 # =====================================================
 
 policy_context = ""
@@ -180,6 +176,7 @@ for i, doc in enumerate(retrieved_docs):
     policy_context += f"""
 ==================================================
 POLICY SECTION {i + 1}
+Chunk ID: {doc.metadata.get("chunk_id")}
 ==================================================
 
 {doc.page_content}
@@ -212,9 +209,10 @@ IMPORTANT RULES:
 2. Do not invent coverage.
 3. Do not make assumptions.
 4. Do not use outside insurance knowledge.
-5. If information is not available, write:
+5. If information is unavailable, say:
    "Not specified in the policy."
-6. Clearly identify policy requirements.
+6. Clearly distinguish policy requirements from missing
+   information.
 7. Do not approve or deny authorization unless the policy
    explicitly provides enough information.
 
@@ -276,14 +274,16 @@ Coverage Status:
 
 
 9. Policy Evidence
-- Mention the relevant policy sections that support
+- Mention the relevant policy sections supporting
   the response.
 """
 
 
 # =====================================================
-# FINAL LLM RESPONSE
+# LLM RESPONSE
 # =====================================================
+
+print("\nGenerating Prior Authorization Summary...")
 
 final_response = llm.invoke(final_prompt)
 
