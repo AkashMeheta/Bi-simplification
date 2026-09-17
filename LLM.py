@@ -217,7 +217,7 @@ within 48 hours.
 
 Experimental treatments and non-medically necessary
 procedures are excluded from coverage.
-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
+
 API_KEY = "YOUR_GROQ_API_KEY"
 
 BASE_URL = "https://api.groq.com/openai/v1"
