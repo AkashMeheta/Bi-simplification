@@ -298,3 +298,36 @@ print("FINAL PRIOR AUTHORIZATION SUMMARY")
 print("=" * 60)
 
 print(final_response.content)
+
+
+
+Healthcare Insurance Policy
+
+The policy covers medically necessary hospitalization,
+inpatient surgery, and diagnostic procedures when medically
+required.
+
+Covered procedures include cardiac surgery, orthopedic
+surgery, MRI scans and CT scans.
+
+Cosmetic surgery is not covered unless medically necessary
+due to an accident.
+
+Dental treatment is not covered under this policy.
+
+Pre-existing conditions are subject to a waiting period of
+24 months.
+
+Maternity-related hospitalization is subject to a waiting
+period of 12 months.
+
+Prior authorization is required for planned hospitalization,
+major surgeries, MRI scans, CT scans and expensive specialty
+medications.
+
+Emergency hospitalization does not require prior
+authorization, but the insurance company must be notified
+within 48 hours.
+
+Experimental treatments and non-medically necessary
+procedures are excluded from coverage.
