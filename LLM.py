@@ -6,7 +6,7 @@ from langchain_core.documents import Document
 
 
 # =====================================================
-# API CONFIGURATION
+# API CONFIGURATION pip install langchain langchain-openai langchain-community langchain-text-splitters faiss-cpu sentence-transformers
 # =====================================================
 
 API_KEY = "YOUR_API_KEY"
