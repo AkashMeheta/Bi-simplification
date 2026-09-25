@@ -1,362 +1,96 @@
-version_history:
-  ontology:
-    id: healthcare-insurance
-    name: Healthcare Insurance Ontology
-
-  lifecycle:
-    created:
-      date: "2026-08-15"
-      time: "10:30:00"
-      timezone: "Asia/Kolkata"
-      by:
-        user_id: akash.mehta
-        name: Akash Mehta
-        role: ontology-developer
-
-    last_updated:
-      date: "2026-09-25"
-      time: "15:45:00"
-      timezone: "Asia/Kolkata"
-      by:
-        user_id: rahul.sharma
-        name: Rahul Sharma
-        role: ontology-editor
-
-  current_version:
-    version: "1.1.0"
-    status: active
-
-  versions:
-
-    - version: "1.0.0"
-      release_date: "2026-08-15"
-      committed_by: Akash Mehta
-      status: released
-      change_file: v1.0.0.yaml
-
-    - version: "1.1.0"
-      release_date: "2026-09-25"
-      committed_by: Rahul Sharma
-      status: active
-      change_file: v1.1.0.yaml
-
-
-version:
-  version: "1.0.0"
-
-  ontology:
-    id: healthcare-insurance
-    name: Healthcare Insurance Ontology
-
-  commit:
-    id: "ONT-0001"
-
-    type: initial-release
-
-    created:
-      date: "2026-08-15"
-      time: "10:30:00"
-      timezone: "Asia/Kolkata"
-
-    author:
-      user_id: akash.mehta
-      name: Akash Mehta
-      role: ontology-developer
-
-  previous_version: null
-
-  status: released
-
-  summary:
-    description: >
-      Initial release of the Healthcare Insurance Ontology.
-
-  changes:
-
-    - change_id: CHG-001
-
-      type: added
-
-      component: entity
-
-      name: Member
-
-      location:
-        file: entities/member.yaml
-        path: entity
-
-      old_value: null
-
-      new_value:
-        id: member
-        name: Member
-
-      description: >
-        Added the Member entity to represent an insured person.
-
-    - change_id: CHG-002
-
-      type: added
-
-      component: entity
-
-      name: Policy
-
-      location:
-        file: entities/policy.yaml
-        path: entity
-
-      old_value: null
-
-      new_value:
-        id: policy
-        name: Policy
-
-      description: >
-        Added the Policy entity.
-
-    - change_id: CHG-003
-
-      type: added
-
-      component: entity
-
-      name: Claim
-
-      location:
-        file: entities/claim.yaml
-        path: entity
-
-      old_value: null
-
-      new_value:
-        id: claim
-        name: Claim
-
-      description: >
-        Added the Claim entity.
-
-    - change_id: CHG-004
-
-      type: added
-
-      component: entity
-
-      name: Provider
-
-      location:
-        file: entities/provider.yaml
-        path: entity
-
-      old_value: null
-
-      new_value:
-        id: provider
-        name: Provider
-
-      description: >
-        Added the Provider entity.
-
-    - change_id: CHG-005
-
-      type: added
-
-      component: relationship
-
-      name: Policy Claim
-
-      location:
-        file: relationships/policy-claim.yaml
-        path: relationship
-
-      old_value: null
-
-      new_value:
-        id: policy-claim
-        source: policy
-        target: claim
-
-      description: >
-        Added the relationship between Policy and Claim.
-
-  breaking_changes: false
-
-  compatible_with: []
-
-  approval:
-    status: approved
-    approved_by:
-      user_id: ontology-admin
-      name: Ontology Admin
-
-    approved_date: "2026-08-15"
-
-
-
-version:
-  version: "1.1.0"
-
-  ontology:
-    id: healthcare-insurance
-    name: Healthcare Insurance Ontology
-
-  commit:
-    id: "ONT-0002"
-
-    type: update
-
-    created:
-      date: "2026-09-25"
-      time: "15:45:00"
-      timezone: "Asia/Kolkata"
-
-    author:
-      user_id: rahul.sharma
-      name: Rahul Sharma
-      role: ontology-editor
-
-  previous_version: "1.0.0"
-
-  status: active
-
-  summary:
-    description: >
-      Updated Member properties and enhanced policy-claim
-      relationship definitions.
-
-  changes:
-
-    - change_id: CHG-006
-
-      type: added
-
-      component: property
-
-      entity: member
-
-      name: member_status
-
-      location:
-        file: entities/member.yaml
-        path: entity.properties.member_status
-
-      old_value: null
-
-      new_value:
-        type: string
-        required: true
-        allowed_values:
-          - active
-          - inactive
-          - terminated
-
-      description: >
-        Added member status to track the current enrollment state.
-
-    - change_id: CHG-007
-
-      type: added
-
-      component: property
-
-      entity: member
-
-      name: member_type
-
-      location:
-        file: entities/member.yaml
-        path: entity.properties.member_type
-
-      old_value: null
-
-      new_value:
-        type: string
-        allowed_values:
-          - primary
-          - dependent
-
-      description: >
-        Added member type to distinguish primary members
-        from dependents.
-
-    - change_id: CHG-008
-
-      type: modified
-
-      component: relationship
-
-      name: policy-claim
-
-      location:
-        file: relationships/policy-claim.yaml
-        path: relationship.cardinality
-
-      old_value:
-        source: one
-        target: one
-
-      new_value:
-        source: one
-        target: many
-
-      description: >
-        Updated Policy-Claim relationship to allow one policy
-        to have multiple claims.
-
-    - change_id: CHG-009
-
-      type: modified
-
-      component: governance
-
-      entity: member
-
-      location:
-        file: entities/member.yaml
-        path: entity.governance.classification
-
-      old_value:
-        classification: confidential
-
-      new_value:
-        classification: restricted
-
-      description: >
-        Changed Member data classification from confidential
-        to restricted.
-
-    - change_id: CHG-010
-
-      type: added
-
-      component: relationship
-
-      name: provider-claim
-
-      location:
-        file: relationships/provider-claim.yaml
-        path: relationship
-
-      old_value: null
-
-      new_value:
-        id: provider-claim
-        source: provider
-        target: claim
-
-      description: >
-        Added relationship between Provider and Claim.
-
-  breaking_changes: false
-
-  compatible_with:
-    - "1.0.x"
-
-  approval:
-    status: approved
-
-    approved_by:
-      user_id: ontology-admin
-      name: Ontology Admin
-
-    approved_date: "2026-09-25"
+ontology:
+  # Basic Information
+  name:
+    label: Ontology Name
+    type: string
+    required: true
+    placeholder: "e.g. Healthcare Insurance Ontology"
+
+  domain:
+    label: Domain
+    type: select
+    required: true
+    options:
+      - healthcare
+      - finance
+      - customer
+      - supply-chain
+      - other
+
+  description:
+    label: Description
+    type: textarea
+    required: true
+    placeholder: "Describe the purpose and scope of the ontology."
+
+  # Ownership
+  owner:
+    label: Owner
+    type: string
+    required: true
+    placeholder: "e.g. Healthcare Data Team"
+
+  # Versioning
+  version:
+    label: Version
+    type: string
+    required: true
+    default: "1.0.0"
+    validation: "semantic-version"
+
+  # Classification / Search
+  tags:
+    label: Tags
+    type: array
+    required: false
+    placeholder: "Add tags"
+
+  # Lifecycle
+  status:
+    label: Status
+    type: select
+    required: true
+    default: draft
+    options:
+      - draft
+      - active
+      - deprecated
+      - archived
+
+  # Optional Governance Fields
+  namespace:
+    label: Namespace
+    type: string
+    required: false
+    placeholder: "e.g. healthcare.insurance"
+
+  visibility:
+    label: Visibility
+    type: select
+    required: false
+    default: restricted
+    options:
+      - public
+      - internal
+      - restricted
+
+  # Audit Information
+  created_by:
+    label: Created By
+    type: string
+    required: true
+
+  created_date:
+    label: Created Date
+    type: datetime
+    required: true
+
+  last_updated_by:
+    label: Last Updated By
+    type: string
+    required: false
+
+  last_updated_date:
+    label: Last Updated Date
+    type: datetime
+    required: false
