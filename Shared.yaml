@@ -1,114 +1,362 @@
-ontology:
-  id: healthcare-insurance
-  name: Healthcare Insurance Ontology
-  namespace: healthcare.insurance
+version_history:
+  ontology:
+    id: healthcare-insurance
+    name: Healthcare Insurance Ontology
+
+  lifecycle:
+    created:
+      date: "2026-08-15"
+      time: "10:30:00"
+      timezone: "Asia/Kolkata"
+      by:
+        user_id: akash.mehta
+        name: Akash Mehta
+        role: ontology-developer
+
+    last_updated:
+      date: "2026-09-25"
+      time: "15:45:00"
+      timezone: "Asia/Kolkata"
+      by:
+        user_id: rahul.sharma
+        name: Rahul Sharma
+        role: ontology-editor
+
+  current_version:
+    version: "1.1.0"
+    status: active
+
+  versions:
+
+    - version: "1.0.0"
+      release_date: "2026-08-15"
+      committed_by: Akash Mehta
+      status: released
+      change_file: v1.0.0.yaml
+
+    - version: "1.1.0"
+      release_date: "2026-09-25"
+      committed_by: Rahul Sharma
+      status: active
+      change_file: v1.1.0.yaml
+
+
+version:
   version: "1.0.0"
 
-  description: >
-    Ontology representing healthcare insurance members,
-    policies, claims, providers and coverage.
+  ontology:
+    id: healthcare-insurance
+    name: Healthcare Insurance Ontology
 
-  imports:
-    - core
-    - common-relationships
+  commit:
+    id: "ONT-0001"
 
-  entities:
-    - member
-    - policy
-    - claim
-    - provider
-    - coverage
+    type: initial-release
 
-  relationships:
-    - member-policy
-    - policy-claim
-    - provider-claim
+    created:
+      date: "2026-08-15"
+      time: "10:30:00"
+      timezone: "Asia/Kolkata"
 
-  rules:
-    - claim-policy-validation
-    - coverage-validation
+    author:
+      user_id: akash.mehta
+      name: Akash Mehta
+      role: ontology-developer
 
-  mappings:
-    - member-source-mapping
-    - policy-source-mapping
-    - claim-source-mapping
+  previous_version: null
 
-  governance:
-    owner: healthcare-team
-    steward: healthcare-data-steward
-    classification: confidential
+  status: released
 
-  lifecycle:
-    status: active
-    created_at: "2026-01-01"
-    updated_at: "2026-09-01"
+  summary:
+    description: >
+      Initial release of the Healthcare Insurance Ontology.
+
+  changes:
+
+    - change_id: CHG-001
+
+      type: added
+
+      component: entity
+
+      name: Member
+
+      location:
+        file: entities/member.yaml
+        path: entity
+
+      old_value: null
+
+      new_value:
+        id: member
+        name: Member
+
+      description: >
+        Added the Member entity to represent an insured person.
+
+    - change_id: CHG-002
+
+      type: added
+
+      component: entity
+
+      name: Policy
+
+      location:
+        file: entities/policy.yaml
+        path: entity
+
+      old_value: null
+
+      new_value:
+        id: policy
+        name: Policy
+
+      description: >
+        Added the Policy entity.
+
+    - change_id: CHG-003
+
+      type: added
+
+      component: entity
+
+      name: Claim
+
+      location:
+        file: entities/claim.yaml
+        path: entity
+
+      old_value: null
+
+      new_value:
+        id: claim
+        name: Claim
+
+      description: >
+        Added the Claim entity.
+
+    - change_id: CHG-004
+
+      type: added
+
+      component: entity
+
+      name: Provider
+
+      location:
+        file: entities/provider.yaml
+        path: entity
+
+      old_value: null
+
+      new_value:
+        id: provider
+        name: Provider
+
+      description: >
+        Added the Provider entity.
+
+    - change_id: CHG-005
+
+      type: added
+
+      component: relationship
+
+      name: Policy Claim
+
+      location:
+        file: relationships/policy-claim.yaml
+        path: relationship
+
+      old_value: null
+
+      new_value:
+        id: policy-claim
+        source: policy
+        target: claim
+
+      description: >
+        Added the relationship between Policy and Claim.
+
+  breaking_changes: false
+
+  compatible_with: []
+
+  approval:
+    status: approved
+    approved_by:
+      user_id: ontology-admin
+      name: Ontology Admin
+
+    approved_date: "2026-08-15"
 
 
 
-metadata:
-  ontology_id: healthcare-insurance
+version:
+  version: "1.1.0"
 
-  ownership:
-    business_owner: healthcare-team
-    technical_owner: ontology-team
-    data_steward: healthcare-data-steward
+  ontology:
+    id: healthcare-insurance
+    name: Healthcare Insurance Ontology
 
-  lifecycle:
-    status: active
-    version: "1.0.0"
+  commit:
+    id: "ONT-0002"
 
-  governance:
-    classification: confidential
-    pii: true
-    phi: true
+    type: update
 
-  standards:
-    modeling_language: OWL
-    serialization: YAML
-    graph_model: property-graph
+    created:
+      date: "2026-09-25"
+      time: "15:45:00"
+      timezone: "Asia/Kolkata"
 
-  documentation:
-    description: Healthcare insurance domain model
+    author:
+      user_id: rahul.sharma
+      name: Rahul Sharma
+      role: ontology-editor
 
+  previous_version: "1.0.0"
 
+  status: active
 
+  summary:
+    description: >
+      Updated Member properties and enhanced policy-claim
+      relationship definitions.
 
-rule:
-  id: claim-policy-validation
-  name: Claim Policy Validation
+  changes:
 
-  description: >
-    A claim must be associated with an active policy
-    during the claim service date.
+    - change_id: CHG-006
 
-  type: validation
+      type: added
 
-  condition:
-    all:
-      - claim.policy exists
-      - claim.claim_date >= policy.effective_date
-      - claim.claim_date <= policy.expiration_date
+      component: property
 
-  severity: error
+      entity: member
 
-  action:
-    invalid_record: reject
+      name: member_status
 
+      location:
+        file: entities/member.yaml
+        path: entity.properties.member_status
 
-rule:
-  id: coverage-validation
-  name: Coverage Validation
+      old_value: null
 
-  type: validation
+      new_value:
+        type: string
+        required: true
+        allowed_values:
+          - active
+          - inactive
+          - terminated
 
-  condition:
-    all:
-      - coverage.effective_date <= coverage.expiration_date
-      - coverage.coverage_limit >= 0
-      - coverage.deductible >= 0
+      description: >
+        Added member status to track the current enrollment state.
 
-  severity: warning
+    - change_id: CHG-007
 
+      type: added
 
+      component: property
 
+      entity: member
 
+      name: member_type
+
+      location:
+        file: entities/member.yaml
+        path: entity.properties.member_type
+
+      old_value: null
+
+      new_value:
+        type: string
+        allowed_values:
+          - primary
+          - dependent
+
+      description: >
+        Added member type to distinguish primary members
+        from dependents.
+
+    - change_id: CHG-008
+
+      type: modified
+
+      component: relationship
+
+      name: policy-claim
+
+      location:
+        file: relationships/policy-claim.yaml
+        path: relationship.cardinality
+
+      old_value:
+        source: one
+        target: one
+
+      new_value:
+        source: one
+        target: many
+
+      description: >
+        Updated Policy-Claim relationship to allow one policy
+        to have multiple claims.
+
+    - change_id: CHG-009
+
+      type: modified
+
+      component: governance
+
+      entity: member
+
+      location:
+        file: entities/member.yaml
+        path: entity.governance.classification
+
+      old_value:
+        classification: confidential
+
+      new_value:
+        classification: restricted
+
+      description: >
+        Changed Member data classification from confidential
+        to restricted.
+
+    - change_id: CHG-010
+
+      type: added
+
+      component: relationship
+
+      name: provider-claim
+
+      location:
+        file: relationships/provider-claim.yaml
+        path: relationship
+
+      old_value: null
+
+      new_value:
+        id: provider-claim
+        source: provider
+        target: claim
+
+      description: >
+        Added relationship between Provider and Claim.
+
+  breaking_changes: false
+
+  compatible_with:
+    - "1.0.x"
+
+  approval:
+    status: approved
+
+    approved_by:
+      user_id: ontology-admin
+      name: Ontology Admin
+
+    approved_date: "2026-09-25"
