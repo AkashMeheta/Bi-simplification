@@ -73,3 +73,33 @@ Deployment / Neo4j ingestion
                                                               │
                                                               ▼
                                                             Neo4j
+DRAFT
+   ↓
+SUBMITTED
+   ↓
+VALIDATING
+   ↓
+PENDING_REVIEW
+   ↓
+UNDER_REVIEW
+   ↓
+PENDING_APPROVAL
+   ↓
+UNDER_APPROVAL
+   ↓
+APPROVED
+   ↓
+GIT_COMMITTING
+   ↓
+COMMITTED
+
+onyology submission
+
+submission_id
+ontology_id
+ontology_name
+version
+payload
+submitted_by
+submitted_at
+status
