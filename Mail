@@ -1,48 +1,21 @@
-import boto3
-from botocore.exceptions import ClientError
+You can add the following **1–2 concise bullets for each section/flow** in the image:
 
-DEPLOYER_ROLE_ARN = "arn:aws:iam::<ACCOUNT_ID>:role/DEPLOYER-<YOUR-TEAM-NAME-IN-CAPS>"
+### 1. Teradata & Databricks → CCW DPOPTMZ Schema
 
+* **Teradata and Databricks logs are extracted and loaded into the CCW DPOPTMZ Databricks schema.**
+* **Four core tables are created: column metadata, product metadata, usage metrics, and master metrics.**
 
-def get_secret():
-    secret_name = "team/ccwdpoptmz/llm_api_key"
-    region_name = "us-east-1"
+### 2. Column Usage & Query Join Metrics
 
-    # Assume the deployer role to get temporary credentials
-    sts_client = boto3.client("sts", region_name=region_name)
-    assumed = sts_client.assume_role(
-        RoleArn=DEPLOYER_ROLE_ARN,
-        RoleSessionName="get-secret-session"
-    )
-    creds = assumed["Credentials"]
+* **The master metrics data is processed through separate Teradata and Databricks Python jobs to generate column usage metrics and query join metrics.**
+* **Both source-specific results are consolidated into the respective Databricks tables for further analysis.**
 
-    # Create a Secrets Manager client using the assumed role's credentials
-    client = boto3.client(
-        "secretsmanager",
-        region_name=region_name,
-        aws_access_key_id=creds["AccessKeyId"],
-        aws_secret_access_key=creds["SecretAccessKey"],
-        aws_session_token=creds["SessionToken"],
-    )
+### 3. LLM Recommendation & Health Summary
 
-    identity = sts_client.get_caller_identity()
-    print(identity)
+* **Existing metrics are provided to a Python script, which prepares the data and prompt for the LLM to generate optimization recommendations.**
+* **The LLM output is stored as data product recommendations and health summaries for each data product.**
 
-    try:
-        response = client.get_secret_value(
-            SecretId=secret_name
-        )
-    except ClientError as e:
-        # For a list of exceptions, see:
-        # https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
-        raise e
+### 4. Column Metadata Enrichment / Final Processing
 
-    # Extract the secret value
-    secret = response["SecretString"]
-
-    return secret
-
-
-if __name__ == "__main__":
-    secret = get_secret()
-    print(secret)
+* **Column usage and metadata are reconciled through a Python process to identify updated or unused columns.**
+* **The processed results are written back to the `data_product_column_metadata` table for downstream analysis and optimization.**
