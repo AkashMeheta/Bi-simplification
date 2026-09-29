@@ -41,3 +41,35 @@ Git Commit + Push
    │
    ▼
 Deployment / Neo4j ingestion
+
+
+
+                     ┌──────────────────┐
+                     │    React UI      │
+                     │ Create Ontology  │
+                     └────────┬─────────┘
+                              │
+                              ▼
+                     ┌──────────────────┐
+                     │   Backend API    │
+                     │    FastAPI       │
+                     └────────┬─────────┘
+                              │
+             ┌────────────────┼────────────────┐
+             │                │                │
+             ▼                ▼                ▼
+      ┌─────────────┐  ┌──────────────┐  ┌──────────────┐
+      │ PostgreSQL  │  │ Rules Engine │  │ Workflow     │
+      │ Workflow DB │  │              │  │ Service      │
+      └─────────────┘  └──────────────┘  └──────┬───────┘
+                                                │
+                              ┌─────────────────┼──────────────┐
+                              │                 │              │
+                              ▼                 ▼              ▼
+                         Reviewer           Approver       Git Service
+                                                              │
+                                                              ▼
+                                                         Git Repository
+                                                              │
+                                                              ▼
+                                                            Neo4j
