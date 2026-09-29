@@ -1,96 +1,43 @@
-ontology:
-  # Basic Information
-  name:
-    label: Ontology Name
-    type: string
-    required: true
-    placeholder: "e.g. Healthcare Insurance Ontology"
-
-  domain:
-    label: Domain
-    type: select
-    required: true
-    options:
-      - healthcare
-      - finance
-      - customer
-      - supply-chain
-      - other
-
-  description:
-    label: Description
-    type: textarea
-    required: true
-    placeholder: "Describe the purpose and scope of the ontology."
-
-  # Ownership
-  owner:
-    label: Owner
-    type: string
-    required: true
-    placeholder: "e.g. Healthcare Data Team"
-
-  # Versioning
-  version:
-    label: Version
-    type: string
-    required: true
-    default: "1.0.0"
-    validation: "semantic-version"
-
-  # Classification / Search
-  tags:
-    label: Tags
-    type: array
-    required: false
-    placeholder: "Add tags"
-
-  # Lifecycle
-  status:
-    label: Status
-    type: select
-    required: true
-    default: draft
-    options:
-      - draft
-      - active
-      - deprecated
-      - archived
-
-  # Optional Governance Fields
-  namespace:
-    label: Namespace
-    type: string
-    required: false
-    placeholder: "e.g. healthcare.insurance"
-
-  visibility:
-    label: Visibility
-    type: select
-    required: false
-    default: restricted
-    options:
-      - public
-      - internal
-      - restricted
-
-  # Audit Information
-  created_by:
-    label: Created By
-    type: string
-    required: true
-
-  created_date:
-    label: Created Date
-    type: datetime
-    required: true
-
-  last_updated_by:
-    label: Last Updated By
-    type: string
-    required: false
-
-  last_updated_date:
-    label: Last Updated Date
-    type: datetime
-    required: false
+React UI
+   │
+   │ Submit Ontology
+   ▼
+Backend API
+   │
+   ▼
+Create Submission / Workflow Record
+   │
+   ▼
+Ontology Rules Validation
+   │
+   ├── Failed ──► Return errors to UI
+   │
+   ▼
+Business Rules Validation
+   │
+   ├── Failed ──► Return errors to UI
+   │
+   ▼
+Create Review Request
+   │
+   ▼
+Reviewer
+   │
+   ├── Reject ──► Back to Submitter
+   │
+   ▼
+Approver
+   │
+   ├── Reject ──► Back to Submitter/Reviewer
+   │
+   ▼
+Approved
+   │
+   ▼
+Generate / Update Ontology YAML
+   │
+   ▼
+Git Commit + Push
+   │
+   ▼
+Deployment / Neo4j ingestion
